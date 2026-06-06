@@ -1,0 +1,82 @@
+# =============================================================================
+# docker-compose.yml - ICICoS 2026 RAG Bot
+# Infrastruktur database lokal untuk development.
+#
+# Layanan:
+#   db       → PostgreSQL 15 (port 5432) — penyimpanan log chat & admin data
+#   pgadmin  → pgAdmin 4 (port 5050)    — GUI manajemen database via browser
+#
+# Cara menjalankan:
+#   docker compose up -d
+#
+# Cara menghentikan (tanpa hapus data):
+#   docker compose stop
+#
+# Cara menghentikan + hapus container (data volume tetap aman):
+#   docker compose down
+#
+# Cara menghentikan + hapus container DAN volume (data HILANG):
+#   docker compose down -v
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 15 — Database relasional utama
+  # ---------------------------------------------------------------------------
+  db:
+    image: postgres:15-alpine
+    container_name: icicos_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - icicos_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # pgAdmin 4 — GUI manajemen database, akses via http://localhost:5050
+  # ---------------------------------------------------------------------------
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: icicos_pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - icicos_network
+    depends_on:
+      db:
+        condition: service_healthy
+
+# =============================================================================
+# Named Volumes — data persisten, tidak hilang saat container dimatikan
+# =============================================================================
+volumes:
+  postgres_data:
+    name: icicos_postgres_data
+  pgadmin_data:
+    name: icicos_pgadmin_data
+
+# =============================================================================
+# Networks — isolasi jaringan internal antar service
+# =============================================================================
+networks:
+  icicos_network:
+    name: icicos_network
+    driver: bridge

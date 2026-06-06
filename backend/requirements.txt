@@ -1,0 +1,59 @@
+# =============================================================================
+# ICICoS 2026 RAG Bot - Backend Requirements
+# Fase 1: Proof-of-Concept (PoC)
+# Python 3.10+
+# =============================================================================
+
+# --- Web Framework & API ---
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-multipart==0.0.12        # Untuk upload file PDF via API
+
+# --- Telegram Bot ---
+python-telegram-bot==21.9       # v21+ wajib sesuai CLAUDE.md (asyncio, ApplicationBuilder)
+
+# --- RAG Engine: LangChain Ecosystem ---
+langchain==0.3.13
+langchain-community==0.3.13     # Loader PDF, ChromaDB integration
+langchain-huggingface>=0.1.0   # HuggingFace embeddings
+langchain-openai==0.2.14        # OpenAI-compatible client untuk OpenRouter
+
+# --- Vector Store ---
+chromadb>=0.5.23                # Embedded mode (lokal di container backend)
+
+# --- Embedding Model (Local, HuggingFace) ---
+sentence-transformers==3.3.1    # intfloat/multilingual-e5-small
+torch==2.5.1                    # Backend untuk sentence-transformers (CPU)
+transformers>=4.41.0,<4.44.0
+
+# --- Document Parsing ---
+pypdf==5.1.0                    # Parsing file PDF (SOP)
+python-docx==1.1.2              # Parsing file DOCX jika dibutuhkan
+
+# --- Database (PostgreSQL) ---
+sqlalchemy==2.0.36              # ORM untuk log chat & data admin
+asyncpg==0.30.0                 # Driver async PostgreSQL
+alembic==1.14.0                 # Migrasi skema database
+
+# --- Google GenAI (Gemini - alternatif LLM) ---
+google-generativeai==0.8.3
+
+# --- Environment & Config ---
+python-dotenv==1.0.1            # Membaca file .env
+
+# --- Utilities ---
+pydantic==2.10.3                # Data validation (sudah include di FastAPI)
+pydantic-settings==2.7.0        # Settings management dari env vars
+httpx==0.28.1                   # Async HTTP client
+aiofiles==24.1.0                # Async file I/O
+tenacity==9.0.0                 # Retry logic untuk panggilan API LLM
+
+# --- Logging & Monitoring ---
+loguru==0.7.3                   # Structured logging (lebih ekspresif dari stdlib logging)
+
+# --- Development & Testing (Fase 1 PoC) ---
+pytest==8.3.4
+pytest-asyncio==0.24.0
+httpx==0.28.1                   # Test client FastAPI (juga dipakai di runtime)
+
+langchain-ollama>=0.1.0

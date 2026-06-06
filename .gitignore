@@ -1,0 +1,106 @@
+# =============================================================================
+# .gitignore - ICICoS 2026 RAG Bot
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# SECRETS — JANGAN PERNAH DI-COMMIT!
+# ---------------------------------------------------------------------------
+.env
+*.env
+!.env.example
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+ENV/
+*.egg-info/
+dist/
+build/
+.eggs/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+*.pyc
+
+# ---------------------------------------------------------------------------
+# Data & Knowledge Base — file SOP, embedding DB, hasil ekstraksi
+# File-file ini besar, sensitif, dan di-generate ulang saat runtime.
+# Folder tetap ada di repo via .gitkeep
+# ---------------------------------------------------------------------------
+
+# Folder docs: file PDF SOP (bisa sangat besar & sensitif)
+backend/data/docs/*
+!backend/data/docs/.gitkeep
+
+# ChromaDB (vector store) — di-generate ulang dengan poc_rag.py
+data/chroma_db/*
+!data/chroma_db/.gitkeep
+backend/data/chroma_db/*
+!backend/data/chroma_db/.gitkeep
+
+# Hasil ekstraksi teks Gemini — di-generate ulang saat ingesti
+data/extracted_text/*
+!data/extracted_text/.gitkeep
+
+# ---------------------------------------------------------------------------
+# HuggingFace model cache (diunduh otomatis saat runtime)
+# ---------------------------------------------------------------------------
+.cache/
+*.cache
+backend/data/models/
+
+# ---------------------------------------------------------------------------
+# Frontend
+# ---------------------------------------------------------------------------
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# ---------------------------------------------------------------------------
+# IDE & Editor
+# ---------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-project
+*.sublime-workspace
+
+# ---------------------------------------------------------------------------
+# OS
+# ---------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ---------------------------------------------------------------------------
+# Logs
+# ---------------------------------------------------------------------------
+*.log
+logs/
+
+# ---------------------------------------------------------------------------
+# Docker
+# ---------------------------------------------------------------------------
+*.override.yml
+
+# ---------------------------------------------------------------------------
+# Testing
+# ---------------------------------------------------------------------------
+.pytest_cache/
+htmlcov/
+.coverage

@@ -66,3 +66,6 @@ export const uploadDocument = (file) => {
 
 /** DELETE /api/documents/:id */
 export const deleteDocument = (id) => api.delete(`/api/documents/${id}`)
+
+/** GET /api/stats */
+export const getDashboardStats = () => api.get('/api/stats')

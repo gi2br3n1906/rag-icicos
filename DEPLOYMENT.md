@@ -25,3 +25,11 @@ Pastikan hal berikut di-mount ke host agar data tidak hilang saat container rest
 
 ## 4. Continuous Integration / Development
 Untuk fase development lokal, gunakan script run standar atau `docker-compose up --build`. Pastikan .env terkonfigurasi dengan benar sebelum build.
+
+## 5. Restart setelah .env ganti
+
+# Kill semua Python process sekaligus
+Get-WmiObject Win32_Process -Filter "Name='python.exe'" | ForEach-Object {
+    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+}
+Write-Host "Semua Python process sudah di-kill." -ForegroundColor Green

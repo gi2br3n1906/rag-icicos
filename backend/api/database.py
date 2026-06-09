@@ -90,7 +90,7 @@ async def init_db() -> None:
     Aman dipanggil berulang kali (CREATE TABLE IF NOT EXISTS).
     """
     # Import di sini untuk menghindari circular import
-    import api.models  # noqa: F401 — pastikan model ter-register ke Base.metadata
+    import backend.api.models  # noqa: F401 — pastikan model ter-register ke Base.metadata
 
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

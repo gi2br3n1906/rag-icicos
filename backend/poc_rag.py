@@ -74,7 +74,7 @@ def main():
         print("  [!] RESET KNOWLEDGE BASE")
         print("=" * 60)
         print("\n[*] Menghapus seluruh embedding dari ChromaDB...")
-        from rag.ingestion import clear_knowledge_base
+        from backend.rag.ingestion import clear_knowledge_base
         clear_knowledge_base()
         print("\n[OK] ChromaDB collection berhasil di-wipe bersih.")
         print("     Jalankan pipeline ingesti ulang untuk mengisi knowledge base.")
@@ -95,7 +95,7 @@ def main():
 
     # --- LANGKAH 1: Ingesti Dokumen ---
     print(f"\n[1/3] Meng-ingest dokumen: {pdf_path}")
-    from rag.ingestion import ingest_document, EXTRACTED_TEXT_DIR
+    from backend.rag.ingestion import ingest_document, EXTRACTED_TEXT_DIR
     from pathlib import Path
     total_chunks = ingest_document(pdf_path)
     print(f"[OK] Berhasil: {total_chunks} chunk tersimpan di ChromaDB.")
@@ -108,7 +108,7 @@ def main():
     # --- LANGKAH 2: Retrieve ---
     test_query = "Bagaimana cara melakukan registrasi ICICoS 2026?"
     print(f"[2/3] Test Retrieval untuk query:\n   '{test_query}'")
-    from rag.retriever import retrieve_context
+    from backend.rag.retriever import retrieve_context
     docs, score = retrieve_context(test_query)
     print(f"[OK] Ditemukan {len(docs)} chunk relevan. Skor tertinggi: {score:.4f}\n")
 
@@ -121,10 +121,10 @@ def main():
     print(f"\n[3/3] Generating jawaban via LLM...")
     if not docs or score < 0.4:
         print("[!] Skor rendah - menggunakan Fallback Response.")
-        from rag.generator import FALLBACK_RESPONSE
+        from backend.rag.generator import FALLBACK_RESPONSE
         answer = FALLBACK_RESPONSE
     else:
-        from rag.generator import generate_answer
+        from backend.rag.generator import generate_answer
         answer = generate_answer(test_query, docs)
 
     print("\n" + "=" * 60)

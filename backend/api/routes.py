@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.database import get_db
@@ -97,7 +97,48 @@ async def get_chat_logs(
 
 
 # ---------------------------------------------------------------------------
-# Endpoint 3: POST /api/documents/upload
+# Endpoint 3: GET /api/stats
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/stats",
+    summary="Statistik Dashboard",
+    response_description="Data analitik untuk dashboard (total sesi, pengguna unik, dll)",
+)
+async def get_dashboard_stats(
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """
+    Menghitung statistik utama untuk ditampilkan di bagian atas Dashboard Admin.
+    """
+    # 1. Total Sesi Chat
+    total_sessions_result = await db.execute(select(func.count(ChatLog.id)))
+    total_sessions = total_sessions_result.scalar_one_or_none() or 0
+
+    # 2. Pengguna Unik (Count distinct user_id)
+    unique_users_result = await db.execute(select(func.count(func.distinct(ChatLog.user_id))))
+    unique_users = unique_users_result.scalar_one_or_none() or 0
+
+    # 3. Rata-rata Similarity Score
+    avg_sim_result = await db.execute(select(func.avg(ChatLog.similarity_score)))
+    avg_similarity = avg_sim_result.scalar_one_or_none() or 0.0
+
+    # 4. Dokumen SOP Aktif (Status == 'success')
+    active_docs_result = await db.execute(
+        select(func.count(Document.id)).where(Document.status == "success")
+    )
+    active_docs = active_docs_result.scalar_one_or_none() or 0
+
+    return {
+        "total_sessions": total_sessions,
+        "unique_users": unique_users,
+        "avg_similarity": round(avg_similarity, 2),
+        "active_docs": active_docs,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Endpoint 4: POST /api/documents/upload
 # ---------------------------------------------------------------------------
 
 @router.post(

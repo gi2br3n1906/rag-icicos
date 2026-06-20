@@ -20,11 +20,11 @@ async function fetchLogs() {
     // Normalize: accept either a plain array or { data: [...] } envelope
     logs.value = Array.isArray(data) ? data : (data?.data ?? [])
   } catch (err) {
-    console.error('[ChatLogsTable] Gagal mengambil data chat-logs:', err)
+    console.error('[ChatLogsTable] Failed to fetch chat-logs:', err)
     fetchError.value =
       err.response?.data?.detail ??
       err.message ??
-      'Gagal memuat data. Periksa koneksi ke backend.'
+      'Failed to load data. Check backend connection.'
   } finally {
     isLoading.value = false
   }
@@ -32,7 +32,7 @@ async function fetchLogs() {
 
 onMounted(fetchLogs)
 
-// Reset ke halaman 1 setiap kali data baru masuk
+// Reset to page 1 whenever new data arrives
 watch(logs, () => { currentPage.value = 1 })
 
 // ─── Similarity badge helpers ─────────────────────────────────────────────────
@@ -43,9 +43,9 @@ function scoreBadgeClass(score) {
 }
 
 function scoreLabel(score) {
-  if (score > 0.7) return 'Tinggi'
-  if (score >= 0.4) return 'Sedang'
-  return 'Rendah'
+  if (score > 0.7) return 'High'
+  if (score >= 0.4) return 'Medium'
+  return 'Low'
 }
 
 // ─── Search / filter ──────────────────────────────────────────────────────────
@@ -97,11 +97,11 @@ function normField(log, camel, snake) {
     <!-- Table header + search -->
     <div class="px-6 py-4 border-b border-gray-100 flex items-center justify-between gap-4 flex-wrap">
       <div>
-        <h2 class="text-base font-semibold text-slate-800">Riwayat Chat Log Author</h2>
+        <h2 class="text-base font-semibold text-slate-800">Author Chat Log History</h2>
         <p class="text-xs text-slate-400 mt-0.5">
-          <template v-if="isLoading">Memuat data…</template>
+          <template v-if="isLoading">Loading data…</template>
           <template v-else-if="fetchError">–</template>
-          <template v-else>{{ filteredLogs.length }} sesi percakapan ditemukan</template>
+          <template v-else>{{ filteredLogs.length }} conversation session(s) found</template>
         </p>
       </div>
 
@@ -137,7 +137,7 @@ function normField(log, camel, snake) {
             id="chat-log-search"
             v-model="searchQuery"
             type="text"
-            placeholder="Cari user atau pertanyaan…"
+            placeholder="Search user or question…"
             class="pl-9 pr-4 py-2 text-sm bg-gray-50 border border-gray-200 rounded-lg w-60 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent transition"
           />
         </div>
@@ -153,10 +153,10 @@ function normField(log, camel, snake) {
         <path fill-rule="evenodd" d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16ZM8.28 7.22a.75.75 0 0 0-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 1 0 1.06 1.06L10 11.06l1.72 1.72a.75.75 0 1 0 1.06-1.06L11.06 10l1.72-1.72a.75.75 0 0 0-1.06-1.06L10 8.94 8.28 7.22Z" clip-rule="evenodd"/>
       </svg>
       <div>
-        <p class="font-semibold">Gagal memuat chat logs</p>
+        <p class="font-semibold">Failed to load chat logs</p>
         <p class="text-xs text-red-600 mt-0.5">{{ fetchError }}</p>
       </div>
-      <button @click="fetchLogs" class="ml-auto text-xs text-red-600 hover:underline font-medium">Coba lagi</button>
+      <button @click="fetchLogs" class="ml-auto text-xs text-red-600 hover:underline font-medium">Retry</button>
     </div>
 
     <!-- ── Skeleton loader ────────────────────────────────────────────────── -->
@@ -175,16 +175,16 @@ function normField(log, camel, snake) {
         <thead>
           <tr class="bg-slate-50 border-b border-gray-100">
             <th class="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider w-36">
-              Tanggal / Waktu
+              Date / Time
             </th>
             <th class="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider w-28">
               User ID
             </th>
             <th class="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">
-              Pertanyaan Author
+              Author's Question
             </th>
             <th class="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">
-              Jawaban Bot
+              Bot Answer
             </th>
             <th class="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider w-28">
               Similarity
@@ -249,9 +249,9 @@ function normField(log, camel, snake) {
               <svg xmlns="http://www.w3.org/2000/svg" class="w-10 h-10 mx-auto mb-3 text-slate-300" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M20.25 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193-.34.027-.68.052-1.02.072v3.091l-3-3c-1.354 0-2.694-.055-4.02-.163a2.115 2.115 0 0 1-.825-.242m9.345-8.334a2.126 2.126 0 0 0-.476-.095 48.64 48.64 0 0 0-8.048 0c-1.131.094-1.976 1.057-1.976 2.192v4.286c0 .837.46 1.58 1.155 1.951m9.345-8.334V6.637c0-1.621-1.152-3.026-2.76-3.235A48.455 48.455 0 0 0 11.25 3c-2.115 0-4.198.137-6.24.402-1.608.209-2.76 1.614-2.76 3.235v6.226c0 1.621 1.152 3.026 2.76 3.235.577.075 1.157.14 1.74.194V21l4.155-4.155" />
               </svg>
-              <p class="text-sm font-medium">Tidak ada data percakapan</p>
+              <p class="text-sm font-medium">No conversation data found.</p>
               <p class="text-xs mt-1">
-                {{ searchQuery ? 'Coba ubah kata kunci pencarian.' : 'Belum ada chat log dari author.' }}
+                {{ searchQuery ? 'Try a different search keyword.' : 'No author chat logs yet.' }}
               </p>
             </td>
           </tr>
@@ -262,7 +262,7 @@ function normField(log, camel, snake) {
     <!-- Pagination controls -->
     <div class="px-6 py-3 border-t border-gray-100 flex items-center justify-between">
       <p class="text-xs text-slate-400">
-        Halaman {{ currentPage }} dari {{ filteredTotalPages }}
+        Page {{ currentPage }} of {{ filteredTotalPages }}
       </p>
       <div class="flex gap-2">
         <button

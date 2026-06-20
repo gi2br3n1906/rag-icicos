@@ -94,3 +94,54 @@ class ChatLog(Base):
             f"<ChatLog(id={self.id}, user_id='{self.user_id}', "
             f"score={self.similarity_score}, created_at={self.created_at})>"
         )
+
+
+class WhatsAppFAQ(Base):
+    """
+    Tabel: whatsapp_faqs
+    Menyimpan pasangan tanya-jawab hasil ekstraksi chat WhatsApp
+    sebelum disetujui (staging) dan setelah disetujui (ingested).
+    """
+    __tablename__ = "whatsapp_faqs"
+
+    id: Mapped[int] = mapped_column(
+        Integer, primary_key=True, autoincrement=True
+    )
+    question: Mapped[str] = mapped_column(
+        Text, nullable=False,
+        comment="Pertanyaan hasil ekstraksi/formulasi LLM"
+    )
+    answer: Mapped[str] = mapped_column(
+        Text, nullable=False,
+        comment="Jawaban hasil ekstraksi/formulasi LLM"
+    )
+    category: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True,
+        comment="Kategori FAQ (e.g. registrasi, pembayaran)"
+    )
+    status: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="pending",
+        comment="Status review: 'pending', 'approved', 'rejected'"
+    )
+    source_file: Mapped[str] = mapped_column(
+        String(255), nullable=False,
+        comment="Nama file txt ekspor WA asal"
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        comment="Waktu ekstraksi dalam UTC"
+    )
+    approved_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Waktu persetujuan/ingesti ke ChromaDB"
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<WhatsAppFAQ(id={self.id}, status='{self.status}', "
+            f"category='{self.category}', source='{self.source_file}')>"
+        )
+

@@ -117,33 +117,35 @@ async def _log_chat_to_db(
 # ---------------------------------------------------------------------------
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handler untuk command /start. Menampilkan pesan selamat datang."""
+    """Handler for the /start command. Displays a welcome message."""
     user = update.effective_user
     welcome_message = (
-        f"Halo, {user.first_name}! 👋\n\n"
-        "Saya adalah *Asisten Resmi ICICoS 2026* 🎓\n\n"
-        "Saya siap membantu menjawab pertanyaan Anda seputar:\n"
-        "• Panduan Submission Paper (Under Development)\n"
-        "• Prosedur Pembayaran Registrasi (Under Development)\n"
-        "• Jadwal & Timeline Konferensi (Under Development)\n"
-        "• Dan informasi resmi lainnya (Under Development)\n\n"
-        "Silakan ketik pertanyaan Anda langsung di sini!"
+        f"Hello, {user.first_name}! 👋\n\n"
+        "I am the <b>Official Assistant of ICICoS 2026</b> 🎓\n"
+        "(The 9th International Conference on Informatics and Computational Sciences)\n\n"
+        "I am here to help you with questions about:\n"
+        "• Paper Submission Guidelines\n"
+        "• Registration Payment Procedures\n"
+        "• Conference Schedule &amp; Timeline\n"
+        "• And other official conference information\n\n"
+        "Feel free to type your question directly — in English or Bahasa Indonesia!"
     )
-    await update.message.reply_text(welcome_message, parse_mode="Markdown")
+    await update.message.reply_text(welcome_message, parse_mode="HTML")
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handler untuk command /help."""
+    """Handler for the /help command."""
     help_text = (
-        "📚 *Cara Menggunakan Bot ICICoS 2026:*\n\n"
-        "Cukup ketik pertanyaan Anda dalam Bahasa Indonesia atau Inggris.\n\n"
-        "*Contoh pertanyaan:*\n"
-        "• _Bagaimana cara melakukan pembayaran registrasi?_\n"
-        "• _Apa format paper yang diterima?_\n"
-        "• _Kapan batas waktu submission?_\n\n"
-        "Jika bot tidak dapat menjawab, silakan hubungi panitia langsung."
+        "📚 <b>How to Use the ICICoS 2026 Bot:</b>\n\n"
+        "Simply type your question in English or Bahasa Indonesia.\n\n"
+        "<b>Example questions:</b>\n"
+        "• <i>How do I complete the registration payment?</i>\n"
+        "• <i>What paper format is accepted?</i>\n"
+        "• <i>What is the submission deadline?</i>\n"
+        "• <i>Where can I find the paper template?</i>\n\n"
+        "If the bot cannot answer your question, please contact the organizing committee directly."
     )
-    await update.message.reply_text(help_text, parse_mode="Markdown")
+    await update.message.reply_text(help_text, parse_mode="HTML")
 
 
 # ---------------------------------------------------------------------------
@@ -198,9 +200,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             exc_info=True,
         )
         answer = (
-            "⚠️ Maaf, terjadi kesalahan teknis saat memproses pertanyaan Anda. "
-            "Silakan coba lagi dalam beberapa saat, atau hubungi panitia ICICoS 2026 "
-            "secara langsung jika masalah berlanjut."
+            "⚠️ Sorry, a technical error occurred while processing your question. "
+            "Please try again in a moment, or contact the ICICoS 2026 organizing committee "
+            "directly if the problem persists."
         )
 
     # Format jawaban (bold/italic LLM → HTML Telegram)

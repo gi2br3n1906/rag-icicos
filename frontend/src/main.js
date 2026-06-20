@@ -46,6 +46,12 @@ const routes = [
     meta: { title: 'Document Manager – ICICoS 2026 Admin' },
   },
   {
+    path: '/whatsapp-review',
+    name: 'WhatsAppReview',
+    component: () => import('./views/WhatsAppReview.vue'),
+    meta: { title: 'WhatsApp Review – ICICoS 2026 Admin' },
+  },
+  {
     path: '/:pathMatch(.*)*',
     redirect: '/dashboard',
   },

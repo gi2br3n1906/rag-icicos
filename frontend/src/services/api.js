@@ -11,7 +11,7 @@ import axios from 'axios'
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000',
-  timeout: 15_000,
+  timeout: 300_000, // Meningkatkan timeout default ke 5 menit untuk menghindari limit 15 detik pada operasi berat
   headers: {
     'Content-Type': 'application/json',
     Accept: 'application/json',
@@ -61,6 +61,7 @@ export const uploadDocument = (file) => {
   formData.append('file', file)
   return api.post('/api/documents/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 180_000, // Override timeout ke 3 menit untuk proses ingesti dokumen yang memakan waktu lama
   })
 }
 
@@ -69,3 +70,31 @@ export const deleteDocument = (id) => api.delete(`/api/documents/${id}`)
 
 /** GET /api/stats */
 export const getDashboardStats = () => api.get('/api/stats')
+
+/** POST /api/whatsapp/upload (multipart/form-data) */
+export const uploadWhatsAppChat = (file) => {
+  const formData = new FormData()
+  formData.append('file', file)
+  return api.post('/api/whatsapp/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 300_000, // Override ke 5 menit karena proses LLM WA chat bisa lama
+  })
+}
+
+/** GET /api/whatsapp/pending */
+export const getPendingFAQs = () => api.get('/api/whatsapp/pending')
+
+/** PUT /api/whatsapp/pending/:id */
+export const updatePendingFAQ = (id, payload) => api.put(`/api/whatsapp/pending/${id}`, payload)
+
+/** DELETE /api/whatsapp/pending/:id */
+export const deletePendingFAQ = (id) => api.delete(`/api/whatsapp/pending/${id}`)
+
+/** POST /api/whatsapp/pending/:id/approve */
+export const approveSingleFAQ = (id) => api.post(`/api/whatsapp/pending/${id}/approve`)
+
+/** POST /api/whatsapp/approve-all */
+export const approveAllFAQs = () => api.post('/api/whatsapp/approve-all')
+
+/** POST /api/knowledge/reset — wipes ChromaDB and all DB records (destructive!) */
+export const resetKnowledgeBase = () => api.post('/api/knowledge/reset')

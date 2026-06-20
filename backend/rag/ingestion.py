@@ -48,13 +48,14 @@ CHUNK_OVERLAP = 50  # Overlap antar chunk untuk menjaga konteks antar-batas
 # Prompt instruksi untuk Gemini (LLM-Assisted Ingestion)
 # ---------------------------------------------------------------------------
 GEMINI_CONVERSION_PROMPT = (
-    "Kamu adalah pakar analis proses bisnis untuk konferensi ICICoS 2026. "
-    "Perhatikan dokumen diagram BPMN/Flowchart ini dengan teliti. "
-    "Tugasmu adalah mengubah seluruh diagram alir visual yang ada di dokumen ini "
-    "menjadi bentuk teks naratif terstruktur yang linier. "
-    "Sebutkan nama SOP, aktor yang terlibat, urutan langkahnya secara jelas "
-    "dari awal sampai akhir, serta aturan bisnis atau batas waktu (SLA/Deadline) "
-    "jika tertera di dalam diagram."
+    "You are a business process analysis expert for the ICICoS 2026 conference. "
+    "Carefully examine this BPMN/Flowchart diagram document. "
+    "Your task is to convert all visual flow diagrams in this document into a "
+    "linear, structured narrative text written entirely in English. "
+    "State the SOP name, the actors involved, and the sequence of steps clearly "
+    "from start to finish, including any business rules or deadlines (SLA) "
+    "if they are indicated in the diagram. "
+    "The output MUST be in English only, even if the source document is in Bahasa Indonesia."
 )
 
 
@@ -150,6 +151,40 @@ def convert_pdf_to_structured_text(pdf_path: str) -> str:
     """
     # --- Lazy import: hanya diinisialisasi saat fungsi ini dipanggil ---
     import google.generativeai as genai  # noqa: PLC0415
+    from google.generativeai.client import FileServiceClient, GENAI_API_DISCOVERY_URL
+    import googleapiclient.discovery
+    import googleapiclient.http
+    import httplib2
+
+    # Monkey patch FileServiceClient._setup_discovery_api untuk mengatasi bug validasi
+    # API key format baru (AQ.Ab...) pada endpoint discovery public Google.
+    def patched_setup_discovery_api(self, metadata=()):
+        api_key = self._client_options.api_key
+        if api_key is None:
+            raise ValueError(
+                "Invalid operation: Uploading to the File API requires an API key. Please provide a valid API key."
+            )
+
+        # Ambil dokumen discovery tanpa parameter key (endpoint ini publik, key tidak wajib untuk metadata)
+        # Bypas error validasi format key baru "AQ.Ab..." di filter proxy discovery Google.
+        uri = f"{GENAI_API_DISCOVERY_URL}?version=v1beta"
+        
+        request = googleapiclient.http.HttpRequest(
+            http=httplib2.Http(),
+            postproc=lambda resp, content: (resp, content),
+            uri=uri,
+            headers=dict(metadata),
+        )
+        response, content = request.execute()
+        request.http.close()
+
+        discovery_doc = content.decode("utf-8")
+        self._discovery_api = googleapiclient.discovery.build_from_document(
+            discovery_doc, developerKey=api_key
+        )
+
+    # Terapkan monkey patch secara dinamis
+    FileServiceClient._setup_discovery_api = patched_setup_discovery_api
 
     # [VALIDASI 1] Pastikan API key tersedia sebelum proses dimulai
     api_key = os.getenv("GEMINI_API_KEY")
@@ -180,11 +215,12 @@ def convert_pdf_to_structured_text(pdf_path: str) -> str:
         logger.info(
             f"[Gemini Upload] Mengunggah '{path.name}' ke server Google Gemini..."
         )
-        uploaded_file = genai.upload_file(
-            path=str(path),
-            mime_type="application/pdf",
-            display_name=path.name,
-        )
+        with open(path, "rb") as f:
+            uploaded_file = genai.upload_file(
+                path=f,
+                mime_type="application/pdf",
+                display_name=path.name,
+            )
         logger.info(
             f"[Gemini Upload] Berhasil. URI file: {uploaded_file.uri} | "
             f"Status awal: {uploaded_file.state.name}"

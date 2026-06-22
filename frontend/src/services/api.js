@@ -55,6 +55,9 @@ export const getChatLogs = (params = {}) => api.get('/api/chat-logs', { params }
 /** GET /api/documents */
 export const getDocuments = () => api.get('/api/documents')
 
+/** GET /api/documents/:id/chunks */
+export const getDocumentChunks = (id) => api.get(`/api/documents/${id}/chunks`)
+
 /** POST /api/documents/upload  (multipart/form-data) */
 export const uploadDocument = (file) => {
   const formData = new FormData()

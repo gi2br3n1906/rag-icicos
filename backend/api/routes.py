@@ -346,6 +346,80 @@ async def delete_document(
 
 
 # ---------------------------------------------------------------------------
+# Endpoint 6: GET /api/documents/{document_id}/chunks
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/documents/{document_id}/chunks",
+    summary="Lihat Chunk Dokumen",
+    response_description="Daftar potongan teks (chunks) dari dokumen SOP di ChromaDB",
+)
+async def get_document_chunks(
+    document_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """
+    Mengambil isi raw dari chunk yang tersimpan di ChromaDB untuk dokumen tertentu.
+    Hanya mengambil chunk berukuran kecil dari koleksi icicos_sop.
+    """
+    # 1. Cari dokumen di database
+    result = await db.execute(select(Document).where(Document.id == document_id))
+    document = result.scalar_one_or_none()
+    if not document:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Dokumen dengan ID {document_id} tidak ditemukan.",
+        )
+
+    filename = document.filename
+
+    # 2. Query ke ChromaDB secara asinkron
+    try:
+        def sync_get_chunks(fname: str):
+            from langchain_community.vectorstores import Chroma
+            from backend.rag.ingestion import get_embeddings, CHROMA_PERSIST_DIR
+            
+            embeddings = get_embeddings()
+            vector_store = Chroma(
+                persist_directory=CHROMA_PERSIST_DIR,
+                embedding_function=embeddings,
+                collection_name="icicos_sop",
+            )
+            # Dapatkan semua chunk yang memiliki source == filename
+            results = vector_store.get(where={"source": fname})
+            return results
+
+        logger.info(f"[View Chunks] Mengambil chunk untuk file '{filename}' dari ChromaDB...")
+        chroma_data = await asyncio.to_thread(sync_get_chunks, filename)
+        
+        chunks = []
+        if chroma_data and "documents" in chroma_data and chroma_data["documents"]:
+            for i in range(len(chroma_data["documents"])):
+                chunks.append({
+                    "id": chroma_data["ids"][i] if "ids" in chroma_data else str(i),
+                    "content": chroma_data["documents"][i],
+                    "metadata": chroma_data["metadatas"][i] if "metadatas" in chroma_data else {}
+                })
+                
+        return {
+            "status": "success",
+            "document_id": document_id,
+            "filename": filename,
+            "total_chunks": len(chunks),
+            "chunks": chunks
+        }
+    except Exception as chroma_exc:
+        logger.error(
+            f"[View Chunks] Gagal mengambil chunk ChromaDB untuk '{filename}': {chroma_exc}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Gagal mengambil chunk dari ChromaDB: {str(chroma_exc)}",
+        )
+
+
+# ---------------------------------------------------------------------------
 # Pydantic Schemas untuk WhatsApp FAQ
 # ---------------------------------------------------------------------------
 from pydantic import BaseModel

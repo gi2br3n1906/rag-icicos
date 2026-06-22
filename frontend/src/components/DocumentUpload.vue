@@ -6,7 +6,7 @@
  * Also provides a "Reset Knowledge Base" button that calls POST /api/knowledge/reset.
  */
 import { ref, onMounted } from 'vue'
-import { getDocuments, uploadDocument, deleteDocument, resetKnowledgeBase } from '@/services/api'
+import { getDocuments, uploadDocument, deleteDocument, resetKnowledgeBase, getDocumentChunks } from '@/services/api'
 
 // ─── Document list state ──────────────────────────────────────────────────────
 const documents = ref([])
@@ -199,6 +199,39 @@ async function handleReset() {
 // ─── Field normalizer (camelCase ↔ snake_case) ─────────────────────────────────
 function normDoc(doc, camel, snake, fallback = '–') {
   return doc[camel] ?? doc[snake] ?? fallback
+}
+
+// ─── Chunk Viewer Modal State ─────────────────────────────────────────────────
+const isViewingChunks = ref(false)
+const viewingFilename = ref('')
+const currentChunks = ref([])
+const isFetchingChunks = ref(false)
+const fetchChunksError = ref(null)
+
+async function viewChunks(doc) {
+  isViewingChunks.value = true
+  viewingFilename.value = normDoc(doc, 'name', 'filename')
+  currentChunks.value = []
+  isFetchingChunks.value = true
+  fetchChunksError.value = null
+
+  try {
+    const { data } = await getDocumentChunks(doc.id)
+    currentChunks.value = data?.chunks || []
+  } catch (err) {
+    console.error('[DocumentUpload] Failed to fetch chunks:', err)
+    fetchChunksError.value =
+      err.response?.data?.detail ??
+      err.message ??
+      'Failed to load document chunks.'
+  } finally {
+    isFetchingChunks.value = false
+  }
+}
+
+function closeChunkViewer() {
+  isViewingChunks.value = false
+  currentChunks.value = []
 }
 </script>
 
@@ -411,22 +444,38 @@ function normDoc(doc, camel, snake, fallback = '–') {
             Ingested
           </span>
 
-          <!-- Delete button (hover-reveal) -->
-          <button
-            :id="`delete-doc-${doc.id}`"
-            @click="removeDocument(doc.id)"
-            :disabled="deletingId === doc.id"
-            class="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 disabled:cursor-wait"
-            title="Remove document"
-          >
-            <!-- Spinner while deleting this item -->
-            <svg v-if="deletingId === doc.id" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4 animate-spin text-slate-400">
-              <path fill-rule="evenodd" d="M15.312 11.424a5.5 5.5 0 0 1-9.201 2.466l-.312-.311h2.433a.75.75 0 0 0 0-1.5H3.989a.75.75 0 0 0-.75.75v4.242a.75.75 0 0 0 1.5 0v-2.43l.31.31a7 7 0 0 0 11.712-3.138.75.75 0 0 0-1.449-.39Zm1.23-3.723a.75.75 0 0 0 .219-.53V2.929a.75.75 0 0 0-1.5 0V5.36l-.31-.31A7 7 0 0 0 3.239 8.188a.75.75 0 1 0 1.448.389A5.5 5.5 0 0 1 13.89 6.11l.311.31h-2.432a.75.75 0 0 0 0 1.5h4.243a.75.75 0 0 0 .53-.219Z" clip-rule="evenodd" />
-            </svg>
-            <svg v-else xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
-              <path fill-rule="evenodd" d="M8.75 1A2.75 2.75 0 0 0 6 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 1 0 .23 1.482l.149-.022.841 10.518A2.75 2.75 0 0 0 7.596 19h4.807a2.75 2.75 0 0 0 2.742-2.53l.841-10.52.149.023a.75.75 0 0 0 .23-1.482A41.03 41.03 0 0 0 14 4.193V3.75A2.75 2.75 0 0 0 11.25 1h-2.5ZM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4ZM8.58 7.72a.75.75 0 0 0-1.5.06l.3 7.5a.75.75 0 1 0 1.5-.06l-.3-7.5Zm4.34.06a.75.75 0 1 0-1.5-.06l-.3 7.5a.75.75 0 1 0 1.5.06l.3-7.5Z" clip-rule="evenodd" />
-            </svg>
-          </button>
+          <!-- Action buttons (hover-reveal) -->
+          <div class="shrink-0 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <!-- View Chunks button -->
+            <button
+              :id="`view-doc-${doc.id}`"
+              @click="viewChunks(doc)"
+              class="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+              title="View ChromaDB Chunks"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+                <path d="M10 12.5a2.5 2.5 0 100-5 2.5 2.5 0 000 5z" />
+                <path fill-rule="evenodd" d="M.664 10.59a1.651 1.651 0 010-1.186A10.004 10.004 0 0110 3c4.257 0 7.893 2.66 9.336 6.41.147.381.146.804 0 1.186A10.004 10.004 0 0110 17c-4.257 0-7.893-2.66-9.336-6.41zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clip-rule="evenodd" />
+              </svg>
+            </button>
+
+            <!-- Delete button -->
+            <button
+              :id="`delete-doc-${doc.id}`"
+              @click="removeDocument(doc.id)"
+              :disabled="deletingId === doc.id"
+              class="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 disabled:cursor-wait transition-colors"
+              title="Remove document"
+            >
+              <!-- Spinner while deleting this item -->
+              <svg v-if="deletingId === doc.id" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4 animate-spin text-slate-400">
+                <path fill-rule="evenodd" d="M15.312 11.424a5.5 5.5 0 0 1-9.201 2.466l-.312-.311h2.433a.75.75 0 0 0 0-1.5H3.989a.75.75 0 0 0-.75.75v4.242a.75.75 0 0 0 1.5 0v-2.43l.31.31a7 7 0 0 0 11.712-3.138.75.75 0 0 0-1.449-.39Zm1.23-3.723a.75.75 0 0 0 .219-.53V2.929a.75.75 0 0 0-1.5 0V5.36l-.31-.31A7 7 0 0 0 3.239 8.188a.75.75 0 1 0 1.448.389A5.5 5.5 0 0 1 13.89 6.11l.311.31h-2.432a.75.75 0 0 0 0 1.5h4.243a.75.75 0 0 0 .53-.219Z" clip-rule="evenodd" />
+              </svg>
+              <svg v-else xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+                <path fill-rule="evenodd" d="M8.75 1A2.75 2.75 0 0 0 6 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 1 0 .23 1.482l.149-.022.841 10.518A2.75 2.75 0 0 0 7.596 19h4.807a2.75 2.75 0 0 0 2.742-2.53l.841-10.52.149.023a.75.75 0 0 0 .23-1.482A41.03 41.03 0 0 0 14 4.193V3.75A2.75 2.75 0 0 0 11.25 1h-2.5ZM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4ZM8.58 7.72a.75.75 0 0 0-1.5.06l.3 7.5a.75.75 0 1 0 1.5-.06l-.3-7.5Zm4.34.06a.75.75 0 1 0-1.5-.06l-.3 7.5a.75.75 0 1 0 1.5.06l.3-7.5Z" clip-rule="evenodd" />
+              </svg>
+            </button>
+          </div>
         </li>
 
         <!-- Empty state -->
@@ -497,6 +546,77 @@ function normDoc(doc, camel, snake, fallback = '–') {
         </div>
       </Transition>
     </div>
+
+    <!-- ── Chunk Viewer Modal ─────────────────────────────────────────────── -->
+    <Transition name="fade">
+      <div v-if="isViewingChunks" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 sm:p-6" @click.self="closeChunkViewer">
+        <div class="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-full flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+          
+          <!-- Modal Header -->
+          <div class="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-slate-50">
+            <div>
+              <h3 class="text-lg font-bold text-slate-800">ChromaDB Chunks</h3>
+              <p class="text-xs text-slate-500 mt-0.5">{{ viewingFilename }}</p>
+            </div>
+            <button @click="closeChunkViewer" class="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-200/50 rounded-full transition-colors">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5">
+                <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
+              </svg>
+            </button>
+          </div>
+
+          <!-- Modal Body -->
+          <div class="flex-1 overflow-y-auto p-6 bg-slate-50/50">
+            
+            <div v-if="isFetchingChunks" class="flex flex-col items-center justify-center py-12 text-slate-400">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-8 h-8 animate-spin mb-3">
+                <path fill-rule="evenodd" d="M15.312 11.424a5.5 5.5 0 0 1-9.201 2.466l-.312-.311h2.433a.75.75 0 0 0 0-1.5H3.989a.75.75 0 0 0-.75.75v4.242a.75.75 0 0 0 1.5 0v-2.43l.31.31a7 7 0 0 0 11.712-3.138.75.75 0 0 0-1.449-.39Zm1.23-3.723a.75.75 0 0 0 .219-.53V2.929a.75.75 0 0 0-1.5 0V5.36l-.31-.31A7 7 0 0 0 3.239 8.188a.75.75 0 1 0 1.448.389A5.5 5.5 0 0 1 13.89 6.11l.311.31h-2.432a.75.75 0 0 0 0 1.5h4.243a.75.75 0 0 0 .53-.219Z" clip-rule="evenodd" />
+              </svg>
+              <p class="text-sm">Fetching chunks from ChromaDB...</p>
+            </div>
+
+            <div v-else-if="fetchChunksError" class="bg-red-50 text-red-600 p-4 rounded-xl text-sm text-center border border-red-100">
+              {{ fetchChunksError }}
+            </div>
+
+            <div v-else-if="currentChunks.length === 0" class="text-center py-12 text-slate-500 text-sm">
+              No chunks found for this document in ChromaDB.
+            </div>
+
+            <div v-else class="space-y-4">
+              <div class="text-xs font-semibold text-slate-500 mb-2 uppercase tracking-wider px-1">
+                Total Chunks: {{ currentChunks.length }}
+              </div>
+              
+              <div v-for="(chunk, idx) in currentChunks" :key="chunk.id" class="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow">
+                <div class="bg-indigo-50/50 px-4 py-2 border-b border-slate-100 flex items-center justify-between">
+                  <span class="text-xs font-bold text-indigo-600">Chunk #{{ idx + 1 }}</span>
+                  <span class="text-[10px] font-mono text-slate-400 bg-slate-100 px-2 py-0.5 rounded truncate max-w-[200px]" :title="chunk.id">ID: {{ chunk.id }}</span>
+                </div>
+                <div class="p-4 text-sm text-slate-700 whitespace-pre-wrap font-mono leading-relaxed bg-slate-50/30">
+                  {{ chunk.content }}
+                </div>
+                <!-- Metadata Footer -->
+                <div class="px-4 py-2 bg-slate-50 border-t border-slate-100 flex flex-wrap gap-2">
+                  <span v-for="(val, key) in chunk.metadata" :key="key" class="inline-flex text-[10px] bg-white border border-slate-200 text-slate-500 rounded px-1.5 py-0.5 shadow-sm">
+                    <strong class="font-semibold text-slate-600 mr-1">{{ key }}:</strong> {{ val }}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+          </div>
+          
+          <!-- Modal Footer -->
+          <div class="px-6 py-4 border-t border-gray-100 bg-white text-right">
+            <button @click="closeChunkViewer" class="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors">
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
   </div>
 </template>
 
@@ -509,5 +629,14 @@ function normDoc(doc, camel, snake, fallback = '–') {
 .slide-down-leave-to {
   opacity: 0;
   transform: translateY(-8px);
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
 }
 </style>

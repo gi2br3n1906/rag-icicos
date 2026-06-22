@@ -28,6 +28,8 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
+from langchain.retrievers import ParentDocumentRetriever
+from langchain.storage import LocalFileStore
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,7 @@ logger = logging.getLogger(__name__)
 EMBEDDING_MODEL_NAME = "intfloat/multilingual-e5-small"  # 768 dim — upgraded dari e5-small (384 dim)
 CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "./data/chroma_db")
 EXTRACTED_TEXT_DIR = os.getenv("EXTRACTED_TEXT_DIR", "./data/extracted_text")
+PARENT_STORE_DIR = os.getenv("PARENT_STORE_DIR", "./data/parent_store")
 
 # ---------------------------------------------------------------------------
 # Konfigurasi Chunking
@@ -117,6 +120,28 @@ def get_embeddings() -> HuggingFaceEmbeddings:
         model_name=EMBEDDING_MODEL_NAME,
         model_kwargs={"device": "cpu"},
         encode_kwargs={"normalize_embeddings": True},
+    )
+
+def get_parent_document_retriever() -> ParentDocumentRetriever:
+    """Menginisialisasi ParentDocumentRetriever."""
+    vectorstore = Chroma(
+        persist_directory=CHROMA_PERSIST_DIR,
+        embedding_function=get_embeddings(),
+        collection_name="icicos_sop",
+    )
+    # Gunakan LocalFileStore untuk menyimpan parent document secara persisten
+    store = LocalFileStore(PARENT_STORE_DIR)
+    
+    child_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=CHUNK_SIZE,
+        chunk_overlap=CHUNK_OVERLAP,
+        separators=["\n\n", "\n", ". ", " ", ""],
+    )
+    
+    return ParentDocumentRetriever(
+        vectorstore=vectorstore,
+        docstore=store,
+        child_splitter=child_splitter,
     )
 
 
@@ -303,70 +328,21 @@ def convert_pdf_to_structured_text(pdf_path: str) -> str:
 
 
 # ===========================================================================
-# 3. Chunking: Teks Naratif → Daftar Document LangChain
-# ===========================================================================
-
-def chunk_text_to_documents(
-    clean_text: str,
-    source_filename: str,
-) -> List[Document]:
-    """
-    Memotong teks naratif murni menjadi chunk-chunk kecil dan mengkonversinya
-    menjadi objek Document LangChain dengan metadata dasar.
-
-    Args:
-        clean_text: Teks naratif hasil konversi Gemini.
-        source_filename: Nama file asal (untuk metadata chunk).
-
-    Returns:
-        List objek Document siap di-embed dan disimpan ke ChromaDB.
-    """
-    logger.info(
-        f"[Chunking] Memulai pemotongan teks. "
-        f"chunk_size={CHUNK_SIZE}, chunk_overlap={CHUNK_OVERLAP}"
-    )
-
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=CHUNK_SIZE,
-        chunk_overlap=CHUNK_OVERLAP,
-        separators=["\n\n", "\n", ". ", " ", ""],
-    )
-
-    # split_text() mengembalikan List[str] karena inputnya adalah string murni
-    text_chunks: List[str] = splitter.split_text(clean_text)
-
-    # Konversi setiap string chunk menjadi objek Document dengan metadata
-    documents: List[Document] = [
-        Document(
-            page_content=chunk,
-            metadata={
-                "source": source_filename,      # Nama file asal
-                "chunk_index": idx,             # Urutan chunk dalam dokumen
-                "ingestion_method": "gemini_llm_assisted",  # Penanda metode ingesti
-            },
-        )
-        for idx, chunk in enumerate(text_chunks)
-    ]
-
-    logger.info(f"[Chunking] ✅ Teks dipotong menjadi {len(documents)} chunk.")
-    return documents
-
-
-# ===========================================================================
-# 4. Fungsi Utama: Orkestrasi Full Pipeline Ingesti
+# 3. Fungsi Utama: Orkestrasi Full Pipeline Ingesti (Parent-Child)
 # ===========================================================================
 
 def ingest_document(pdf_path: str) -> int:
     """
-    Pipeline ingesti lengkap (LLM-Assisted):
+    Pipeline ingesti lengkap (LLM-Assisted) dengan Parent-Child Retriever:
       PDF visual → Gemini 1.5 Flash → teks naratif
-        → chunking → embedding → ChromaDB
+        → simpan naratif penuh (Parent) di Local Store
+        → potong menjadi chunk kecil (Child) → embed → simpan ke ChromaDB
 
     Args:
         pdf_path: Path ke file PDF SOP (bisa berupa diagram BPMN visual).
 
     Returns:
-        Jumlah chunk yang berhasil disimpan ke ChromaDB.
+        Jumlah dokumen (1 parent) yang berhasil disimpan.
 
     Raises:
         ValueError: Jika GEMINI_API_KEY tidak tersedia.
@@ -376,7 +352,7 @@ def ingest_document(pdf_path: str) -> int:
     path = Path(pdf_path)
     logger.info(
         "=" * 60 + "\n"
-        f"[Ingesti] Memulai pipeline LLM-Assisted untuk: '{path.name}'\n"
+        f"[Ingesti] Memulai pipeline LLM-Assisted (Parent-Child) untuk: '{path.name}'\n"
         + "=" * 60
     )
 
@@ -387,42 +363,33 @@ def ingest_document(pdf_path: str) -> int:
     # --- [TAHAP 1b] Simpan hasil ekstraksi ke .txt untuk review manual ---
     save_extracted_text(source_pdf_name=path.name, text=clean_text)
 
-    # --- [TAHAP 2] Chunking teks → List[Document] ---
-    logger.info("[Ingesti] TAHAP 2/3: Pemotongan teks menjadi chunk")
-    documents = chunk_text_to_documents(
-        clean_text=clean_text,
-        source_filename=path.name,
+    # --- [TAHAP 2] Menyiapkan Parent Document ---
+    logger.info("[Ingesti] TAHAP 2/3: Menyiapkan Parent Document utuh")
+    parent_doc = Document(
+        page_content=clean_text,
+        metadata={
+            "source": path.name,
+            "ingestion_method": "gemini_llm_assisted_parent_child",
+            "kategori_dokumen": "SOP" # Penanda SOP untuk metadata filtering nanti
+        }
     )
 
-    if not documents:
-        logger.error(
-            "[Ingesti] ❌ Tidak ada chunk yang dihasilkan. "
-            "Pastikan Gemini berhasil mengekstrak teks dari dokumen."
-        )
-        return 0
-
-    # --- [TAHAP 3] Embedding + simpan ke ChromaDB ---
+    # --- [TAHAP 3] Embedding + simpan ke ChromaDB & Local Store ---
     logger.info(
-        f"[Ingesti] TAHAP 3/3: Embedding {len(documents)} chunk "
-        f"dan menyimpan ke ChromaDB di '{CHROMA_PERSIST_DIR}'"
+        f"[Ingesti] TAHAP 3/3: Memproses chunk (Child) ke ChromaDB dan menyimpan teks utuh (Parent) ke {PARENT_STORE_DIR}"
     )
-    embeddings = get_embeddings()
+    retriever = get_parent_document_retriever()
+    
+    # Menyimpan dokumen. ids digunakan agar jika di-ingest ulang, dokumen lamanya tertimpa (update).
+    retriever.add_documents([parent_doc], ids=[path.name])
 
-    Chroma.from_documents(
-        documents=documents,
-        embedding=embeddings,
-        persist_directory=CHROMA_PERSIST_DIR,
-        collection_name="icicos_sop",
-    )
-
-    total_chunks = len(documents)
     logger.info(
         "=" * 60 + "\n"
-        f"[Ingesti] ✅ SELESAI. {total_chunks} chunk dari '{path.name}' "
-        f"berhasil disimpan ke ChromaDB.\n"
+        f"[Ingesti] ✅ SELESAI. Dokumen SOP '{path.name}' berhasil di-ingest "
+        f"menggunakan pola Parent-Child.\n"
         + "=" * 60
     )
-    return total_chunks
+    return 1
 
 
 # ===========================================================================
@@ -431,32 +398,43 @@ def ingest_document(pdf_path: str) -> int:
 
 def clear_knowledge_base() -> None:
     """
-    Menghapus seluruh isi ChromaDB collection ('icicos_sop').
+    Menghapus seluruh isi ChromaDB — both collections:
+      - 'icicos_sop'  : Parent-Child chunks dari dokumen SOP
+      - 'icicos_faq'  : FAQ chunks dari histori WhatsApp
 
     Fungsi ini berguna untuk mereset knowledge base sebelum proses ingesti
     ulang (re-ingest) semua dokumen SOP dari awal, menghindari duplikasi data
     embedding di dalam vector store.
 
     Catatan: Operasi ini bersifat destruktif dan tidak dapat di-undo.
-    ChromaDB akan menghapus seluruh embedding, dokumen, dan metadata
-    yang tersimpan di dalam collection 'icicos_sop'.
     """
-    logger.info("[Reset] Memulai proses penghapusan ChromaDB collection 'icicos_sop'...")
+    logger.info("[Reset] Memulai proses penghapusan seluruh ChromaDB collections...")
 
     embeddings = get_embeddings()
 
-    # Inisialisasi objek Chroma menggunakan persist directory dan model yang sama
-    # agar terhubung ke collection yang benar sebelum dihapus.
-    vector_store = Chroma(
+    # Hapus collection SOP (berisi child chunks + parent-child mapping)
+    sop_store = Chroma(
         persist_directory=CHROMA_PERSIST_DIR,
         embedding_function=embeddings,
         collection_name="icicos_sop",
     )
+    sop_store.delete_collection()
+    logger.info("[Reset] Collection 'icicos_sop' berhasil dihapus.")
 
-    # Hapus seluruh isi collection (semua embedding, dokumen, metadata)
-    vector_store.delete_collection()
+    # Hapus collection FAQ (berisi chunk histori WhatsApp yang diapprove)
+    try:
+        faq_store = Chroma(
+            persist_directory=CHROMA_PERSIST_DIR,
+            embedding_function=embeddings,
+            collection_name="icicos_faq",
+        )
+        faq_store.delete_collection()
+        logger.info("[Reset] Collection 'icicos_faq' berhasil dihapus.")
+    except Exception as e:
+        # Collection mungkin belum dibuat jika belum ada FAQ yang di-approve
+        logger.warning(f"[Reset] Collection 'icicos_faq' tidak dapat dihapus (mungkin belum ada): {e}")
 
-    logger.info("ChromaDB collection berhasil di-wipe bersih.")
+    logger.info("[Reset] ✅ Seluruh ChromaDB collections berhasil di-wipe bersih.")
 
 
 # ===========================================================================

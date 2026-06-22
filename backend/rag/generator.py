@@ -1,52 +1,70 @@
 """
 generator.py - Modul Generator: mengirim query + konteks ke LLM dan mendapatkan jawaban.
-Mendukung tiga provider: OpenRouter, Google Gemini, dan Ollama Lokal.
 
-System Prompt sesuai PROMPTS.md.
+Arsitektur Baru (Bulletproof Agentic RAG):
+  - SOP_SYSTEM_PROMPT : Instruksi khusus untuk menjawab SOP — wajib lengkap & urut.
+  - FAQ_SYSTEM_PROMPT : Instruksi khusus untuk menjawab FAQ — singkat & padat.
+  - generate_sop_answer() : Generator untuk jalur SOP.
+  - generate_faq_answer() : Generator untuk jalur FAQ.
+  - generate_answer()     : Entry point lama (backward compat / direct call).
+
+Mendukung tiga provider: OpenRouter, Google Gemini, dan Ollama Lokal.
 """
 import logging
 import os
-from typing import List
+from typing import List, Optional
 
 from langchain_core.documents import Document
 
 logger = logging.getLogger(__name__)
 
-# --- System Prompt ---
-SYSTEM_PROMPT = """You are the official assistant of ICICoS 2026 (The 9th International Conference on Informatics and Computational Sciences), organized by the Department of Informatics, Universitas Diponegoro.
+# ---------------------------------------------------------------------------
+# System Prompt: Jalur SOP — Wajib Lengkap & Berurutan
+# ---------------------------------------------------------------------------
+SOP_SYSTEM_PROMPT = """You are the official procedural guide assistant of ICICoS 2026 (The 9th International Conference on Informatics and Computational Sciences), organized by the Department of Informatics, Universitas Diponegoro.
 
-Your task is to help authors with conference-related questions based SOLELY on the information provided in the context below.
+Your ONLY task is to explain the official SOP (Standard Operating Procedure) based on the provided document.
 
-ABSOLUTE RULES:
-1. ALWAYS respond in English, regardless of the language the user writes in. If a user asks in Bahasa Indonesia or any other language, still answer in English.
-2. If the requested information is not available in the context, honestly state that you do not have that information and suggest contacting the organizing committee directly. STRICTLY FORBIDDEN to fabricate answers (hallucination).
-3. Use clear and easy-to-read formatting.
-4. Use polite and professional English.
-5. Provide only information relevant from the author's perspective. Do NOT disclose internal committee matters.
-6. Go directly to the point. Do NOT add unusual greetings (e.g. "Good morning", "Dear author", etc.).
-7. When using text styling (bold/italic), ENSURE opening and closing tags are properly nested and always closed.
-8. TELEGRAM HTML FORMAT (MUST BE STRICTLY FOLLOWED TO AVOID PARSING ERRORS):
-   - Use ONLY HTML tags supported by Telegram:
-     * Bold: <b>bold text</b>
-     * Italic: <i>italic text</i>
-     * Underline: <u>underlined text</u>
-     * Strikethrough: <s>strikethrough text</s>
-     * Spoiler: <span class="tg-spoiler">spoiler text</span>
-     * Inline code: <code>code</code>
-     * Block code: <pre>code block</pre>
-   - STRICTLY FORBIDDEN — the following tags are NOT supported by the Telegram API and will cause message delivery failure:
-     * DO NOT use list tags: <ul>, <ol>, <li>. Instead, create bullet points using plain text symbols like bullet (•), dash (-), or numbers (1., 2.) followed by a regular newline.
-     * DO NOT use heading tags: <h1>, <h2>, <h3>, <h4>, <h5>, <h6>. For headings, simply use bold: <b>Heading</b>
-     * DO NOT use paragraph tags: <p>. Use regular newlines instead.
-     * DO NOT use any Markdown formatting (e.g. # for headers, * for bold, or [text](url) for links). Use pure HTML as described above.
+ABSOLUTE RULES FOR SOP ANSWERS:
+1. You MUST list ALL steps from the SOP document, in the EXACT order they appear. Skipping even ONE step is a critical failure.
+2. ALWAYS respond in English, regardless of the language the user writes in.
+3. Start directly with the steps. Do NOT add preambles like "Here are the steps" or greetings.
+4. Format each step clearly as a numbered list using plain text (e.g., 1., 2., 3.).
+5. Use bold <b>Step Title</b> for each step header if the SOP has named steps.
+6. If the SOP document is not provided or is empty, state that information is not available and suggest contacting the organizing committee.
+7. TELEGRAM HTML FORMAT — Use ONLY: <b>, <i>, <u>, <s>, <code>, <pre>. NEVER use: <ul>, <ol>, <li>, <h1>-<h6>, <p>, or Markdown.
 
-Document Context (SOP):
+SOP Document:
 {context}
 
-Author's Question:
+User's Question:
 {question}"""
 
-# --- Fallback Response ---
+# ---------------------------------------------------------------------------
+# System Prompt: Jalur FAQ — Singkat & Padat
+# ---------------------------------------------------------------------------
+FAQ_SYSTEM_PROMPT = """You are the official concise Q&A assistant of ICICoS 2026 (The 9th International Conference on Informatics and Computational Sciences).
+
+Your task is to give a SHORT, DIRECT answer based on the FAQ context provided.
+
+ABSOLUTE RULES FOR FAQ ANSWERS:
+1. ALWAYS respond in English, regardless of the language the user writes in.
+2. Keep your answer to a MAXIMUM of 3 short sentences. Be concise and to the point.
+3. Do NOT explain procedures step-by-step. Give the direct answer only.
+4. If the information is not in the context, state you don't have that information and suggest contacting the organizing committee.
+5. STRICTLY FORBIDDEN to fabricate answers (hallucination).
+6. Go directly to the point. Do NOT add greetings or sign-offs.
+7. TELEGRAM HTML FORMAT — Use ONLY: <b>, <i>, <u>. NEVER use: <ul>, <ol>, <li>, or Markdown.
+
+FAQ Context:
+{context}
+
+User's Question:
+{question}"""
+
+# ---------------------------------------------------------------------------
+# Fallback Response
+# ---------------------------------------------------------------------------
 FALLBACK_RESPONSE = (
     "I'm sorry, information related to your question is not currently available in our "
     "document database. Please contact the ICICoS 2026 organizing committee directly "
@@ -54,13 +72,117 @@ FALLBACK_RESPONSE = (
 )
 
 
-def _format_context(docs: List[Document]) -> str:
-    """Menggabungkan isi chunk dokumen menjadi satu string konteks."""
+def _call_openrouter(prompt: str) -> str:
+    """Panggil OpenRouter API dengan prompt yang sudah diformat."""
+    from openai import OpenAI
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    model = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct:free")
+    if not api_key:
+        raise ValueError("OPENROUTER_API_KEY tidak ditemukan di environment variables!")
+    client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
+    response = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.2,
+    )
+    return response.choices[0].message.content
+
+
+def _call_gemini(prompt: str) -> str:
+    """Panggil Gemini API dengan prompt yang sudah diformat."""
+    import google.generativeai as genai
+    api_key = os.getenv("GEMINI_API_KEY")
+    model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY tidak ditemukan di environment variables!")
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(model_name)
+    response = model.generate_content(prompt)
+    return response.text
+
+
+def _call_ollama(prompt: str) -> str:
+    """Panggil Ollama lokal dengan prompt yang sudah diformat."""
+    from openai import OpenAI
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+    model = os.getenv("OLLAMA_MODEL", "granite4.1:3b")
+    client = OpenAI(base_url=base_url, api_key="ollama_local")
+    response = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.0,
+    )
+    return response.choices[0].message.content
+
+
+def _dispatch(prompt: str) -> str:
+    """Kirim prompt ke provider LLM yang aktif berdasarkan LLM_PROVIDER env var."""
+    provider = os.getenv("LLM_PROVIDER", "openrouter").lower()
+    logger.info(f"[Generator] 🤖 LLM_PROVIDER aktif: '{provider}'")
+    if provider == "gemini":
+        return _call_gemini(prompt)
+    elif provider == "ollama":
+        return _call_ollama(prompt)
+    else:
+        return _call_openrouter(prompt)
+
+
+def _format_sop_context(doc: Document) -> str:
+    """Format satu Parent Document SOP menjadi string konteks."""
+    source = doc.metadata.get("source", "SOP Document")
+    return f"[Source: {source}]\n\n{doc.page_content}"
+
+
+def _format_faq_context(docs: List[Document]) -> str:
+    """Gabungkan beberapa FAQ chunk menjadi satu string konteks."""
     return "\n\n---\n\n".join(
-        f"[Halaman {doc.metadata.get('page', '?')}]\n{doc.page_content}" 
-        for doc in docs
+        f"[FAQ #{i+1}]\n{doc.page_content}"
+        for i, doc in enumerate(docs)
     )
 
+
+# ---------------------------------------------------------------------------
+# Public API: Specialized generators untuk workflow baru
+# ---------------------------------------------------------------------------
+
+def generate_sop_answer(query: str, sop_doc: Document) -> str:
+    """
+    Menghasilkan jawaban untuk jalur SOP menggunakan SOP_SYSTEM_PROMPT.
+    Jaminan: Seluruh isi SOP dikirimkan sebagai konteks — tidak ada langkah yang terlewat.
+
+    Args:
+        query  : Pertanyaan user (sudah direformulasi).
+        sop_doc: Parent Document SOP utuh hasil ParentDocumentRetriever.
+
+    Returns:
+        String jawaban berformat HTML Telegram.
+    """
+    context = _format_sop_context(sop_doc)
+    prompt = SOP_SYSTEM_PROMPT.format(context=context, question=query)
+    logger.info(f"[Generator-SOP] Mengirim SOP ({len(context):,} karakter) ke LLM.")
+    return _dispatch(prompt)
+
+
+def generate_faq_answer(query: str, faq_docs: List[Document]) -> str:
+    """
+    Menghasilkan jawaban singkat untuk jalur FAQ menggunakan FAQ_SYSTEM_PROMPT.
+
+    Args:
+        query   : Pertanyaan user (sudah direformulasi).
+        faq_docs: List chunk FAQ yang relevan dari ChromaDB.
+
+    Returns:
+        String jawaban singkat berformat HTML Telegram.
+    """
+    context = _format_faq_context(faq_docs)
+    prompt = FAQ_SYSTEM_PROMPT.format(context=context, question=query)
+    logger.info(f"[Generator-FAQ] Mengirim {len(faq_docs)} FAQ chunk ke LLM.")
+    return _dispatch(prompt)
+
+
+# ---------------------------------------------------------------------------
+# Legacy: generate_answer() untuk backward compatibility
+# ---------------------------------------------------------------------------
 
 def generate_answer_openrouter(query: str, docs: List[Document]) -> str:
     """
@@ -80,14 +202,17 @@ def generate_answer_openrouter(query: str, docs: List[Document]) -> str:
         api_key=api_key,
     )
 
-    context = _format_context(docs)
-    prompt = SYSTEM_PROMPT.format(context=context, question=query)
+    context = "\n\n---\n\n".join(
+        f"[Halaman {doc.metadata.get('page', '?')}]\n{doc.page_content}"
+        for doc in docs
+    )
+    prompt = SOP_SYSTEM_PROMPT.format(context=context, question=query)
 
     logger.info(f"Mengirim query ke OpenRouter (model: {model})")
     response = client.chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.2,  # Suhu rendah untuk jawaban yang lebih faktual
+        temperature=0.2,
     )
     return response.choices[0].message.content
 
@@ -95,12 +220,11 @@ def generate_answer_openrouter(query: str, docs: List[Document]) -> str:
 def generate_answer_gemini(query: str, docs: List[Document]) -> str:
     """
     Menghasilkan jawaban menggunakan Google Gemini API.
-    Model default: gemini-1.5-flash (cepat dan hemat quota).
     """
     import google.generativeai as genai  # Lazy import
 
     api_key = os.getenv("GEMINI_API_KEY")
-    model_name = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+    model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
     if not api_key:
         raise ValueError("GEMINI_API_KEY tidak ditemukan di environment variables!")
@@ -108,8 +232,11 @@ def generate_answer_gemini(query: str, docs: List[Document]) -> str:
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel(model_name)
 
-    context = _format_context(docs)
-    prompt = SYSTEM_PROMPT.format(context=context, question=query)
+    context = "\n\n---\n\n".join(
+        f"[Halaman {doc.metadata.get('page', '?')}]\n{doc.page_content}"
+        for doc in docs
+    )
+    prompt = SOP_SYSTEM_PROMPT.format(context=context, question=query)
 
     logger.info(f"Mengirim query ke Gemini (model: {model_name})")
     response = model.generate_content(prompt)
@@ -118,42 +245,36 @@ def generate_answer_gemini(query: str, docs: List[Document]) -> str:
 
 def generate_answer_ollama(query: str, docs: List[Document]) -> str:
     """
-    Menghasilkan jawaban menggunakan Ollama lokal dengan memanfaatkan
-    OpenAI-compatible endpoint bawaan Ollama.
-    Model default: granite4.1:3b.
+    Menghasilkan jawaban menggunakan Ollama lokal.
     """
-    from openai import OpenAI  # Memanfaatkan library openai yang sudah ada
+    from openai import OpenAI
 
-    # Default URL untuk OpenAI-compatible endpoint di Ollama lokal adalah /v1
     base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
     model = os.getenv("OLLAMA_MODEL", "granite4.1:3b")
 
-    # Ollama tidak mengecek API key, diisi string sembarang agar object client valid
-    client = OpenAI(
-        base_url=base_url,
-        api_key="ollama_local",
-    )
+    client = OpenAI(base_url=base_url, api_key="ollama_local")
 
-    context = _format_context(docs)
-    prompt = SYSTEM_PROMPT.format(context=context, question=query)
+    context = "\n\n---\n\n".join(
+        f"[Halaman {doc.metadata.get('page', '?')}]\n{doc.page_content}"
+        for doc in docs
+    )
+    prompt = SOP_SYSTEM_PROMPT.format(context=context, question=query)
 
     logger.info(f"Mengirim query ke Ollama Lokal (model: {model})")
     response = client.chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.0,  # Set ke 0.0 agar model ukuran kecil bener-bener nurut konteks SOP
+        temperature=0.0,
     )
     return response.choices[0].message.content
 
 
 def generate_answer(query: str, docs: List[Document]) -> str:
     """
-    Fungsi utama generator. Memilih provider LLM berdasarkan environment variable.
+    Fungsi utama generator (legacy). Memilih provider LLM berdasarkan environment variable.
     LLM_PROVIDER bisa diset ke 'openrouter', 'gemini', atau 'ollama'.
     """
     provider = os.getenv("LLM_PROVIDER", "openrouter").lower()
-
-    # Log eksplisit agar mudah dicek di terminal mana provider yang aktif
     logger.info(f"[Generator] 🤖 LLM_PROVIDER aktif: '{provider}'")
 
     if provider == "gemini":

@@ -1,6 +1,6 @@
 # =============================================================================
 # ICICoS 2026 RAG Bot - Backend Requirements
-# Fase 1: Proof-of-Concept (PoC)
+# Fase 2: Bulletproof Agentic RAG (LangGraph + Parent-Child Retriever)
 # Python 3.10+
 # =============================================================================
 
@@ -17,6 +17,7 @@ langchain==0.3.13
 langchain-community==0.3.13     # Loader PDF, ChromaDB integration
 langchain-huggingface>=0.1.0   # HuggingFace embeddings
 langchain-openai==0.2.14        # OpenAI-compatible client untuk OpenRouter
+langgraph>=0.2.76,<0.3.0        # Agentic Workflow State Machine
 
 # --- Vector Store ---
 chromadb>=0.5.23                # Embedded mode (lokal di container backend)

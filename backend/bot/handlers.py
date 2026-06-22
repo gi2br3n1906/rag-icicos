@@ -17,7 +17,7 @@ from telegram import Update
 from telegram.constants import ChatAction, ParseMode
 from telegram.ext import ContextTypes
 
-from backend.rag.chain import run_rag_chain
+from backend.rag.workflow import run_agentic_workflow
 
 logger = logging.getLogger(__name__)
 
@@ -184,9 +184,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     similarity_score: float = 0.0
 
     try:
-        # Jalankan pipeline RAG: retrieve dari ChromaDB → generate via LLM
-        # run_rag_chain kini mengembalikan Tuple[str, float]
-        answer, similarity_score = await run_rag_chain(user_query)
+        # Import db session factory untuk diinjeksikan ke workflow
+        from backend.api.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db_session:
+            # Jalankan Agentic Workflow dengan memory dari PostgreSQL
+            answer, similarity_score = await run_agentic_workflow(
+                query=user_query,
+                user_id=str(user.id),
+                db_session=db_session,
+            )
 
         logger.info(
             f"[Bot] Jawaban di-generate untuk user {user.id}. "

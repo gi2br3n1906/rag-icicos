@@ -624,7 +624,7 @@ async def approve_single_faq(
                 documents=[doc],
                 embedding=embeddings,
                 persist_directory=CHROMA_PERSIST_DIR,
-                collection_name="icicos_sop"
+                collection_name="icicos_faq"  # ✅ Koleksi terpisah dari SOP
             )
 
         logger.info(f"[Approve FAQ] Memulai ingesti FAQ ID={faq_id} ke ChromaDB...")
@@ -716,7 +716,7 @@ async def approve_all_faqs(
                 documents=docs,
                 embedding=embeddings,
                 persist_directory=CHROMA_PERSIST_DIR,
-                collection_name="icicos_sop"
+                collection_name="icicos_faq"  # ✅ Koleksi terpisah dari SOP
             )
 
         logger.info(f"[Approve FAQ Bulk] Memulai ingesti {len(faqs_data)} FAQ ke ChromaDB...")
@@ -782,7 +782,20 @@ async def reset_knowledge_base(
             detail=f"Failed to wipe ChromaDB: {str(chroma_exc)}",
         )
 
-    # 2. Delete all WhatsAppFAQ records
+    # 2. Wipe LocalFileStore (Parent Document Store — new in Agentic RAG)
+    try:
+        import os
+        from backend.rag.ingestion import PARENT_STORE_DIR
+        parent_store_path = Path(PARENT_STORE_DIR)
+        if parent_store_path.exists():
+            shutil.rmtree(parent_store_path)
+            logger.info(f"[Reset] Parent store directory '{PARENT_STORE_DIR}' wiped successfully.")
+        else:
+            logger.info("[Reset] Parent store directory does not exist yet — skipping.")
+    except Exception as store_exc:
+        logger.warning(f"[Reset] Failed to wipe parent store: {store_exc}. Continuing...")
+
+    # 3. Delete all WhatsAppFAQ records
     try:
         from sqlalchemy import delete as sa_delete
         await db.execute(sa_delete(WhatsAppFAQ))
@@ -794,7 +807,7 @@ async def reset_knowledge_base(
             detail=f"ChromaDB wiped, but failed to delete FAQ records: {str(faq_exc)}",
         )
 
-    # 3. Delete all Document records and commit
+    # 4. Delete all Document records and commit
     try:
         from sqlalchemy import delete as sa_delete
         await db.execute(sa_delete(Document))
@@ -811,8 +824,8 @@ async def reset_knowledge_base(
     return {
         "status": "success",
         "message": (
-            "Knowledge base has been fully reset. ChromaDB collection wiped and all "
-            "document/FAQ records deleted from the database. You may now re-ingest documents."
+            "Knowledge base has been fully reset. ChromaDB collection, parent document store, "
+            "and all document/FAQ records deleted from the database. You may now re-ingest documents."
         ),
     }
 

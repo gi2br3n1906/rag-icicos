@@ -25,7 +25,7 @@ chromadb>=0.5.23                # Embedded mode (lokal di container backend)
 # --- Embedding Model (Local, HuggingFace) ---
 sentence-transformers==3.3.1    # intfloat/multilingual-e5-small
 torch>=2.0.0                    # Backend untuk sentence-transformers (CPU)
-transformers>=4.41.0,<4.44.0
+transformers>=4.41.0
 
 # --- Document Parsing ---
 pypdf==5.1.0                    # Parsing file PDF (SOP)

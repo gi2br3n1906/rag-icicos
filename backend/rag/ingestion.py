@@ -30,6 +30,7 @@ from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.retrievers import ParentDocumentRetriever
 from langchain.storage import LocalFileStore
+from langchain.storage._lc_store import create_kv_docstore
 
 logger = logging.getLogger(__name__)
 
@@ -123,14 +124,23 @@ def get_embeddings() -> HuggingFaceEmbeddings:
     )
 
 def get_parent_document_retriever() -> ParentDocumentRetriever:
-    """Menginisialisasi ParentDocumentRetriever."""
+    """Menginisialisasi ParentDocumentRetriever dengan docstore yang sudah dikonfigurasi.
+    
+    LocalFileStore hanya bisa menyimpan bytes, sehingga perlu dibungkus dengan
+    create_kv_docstore yang menangani serialisasi Document <-> bytes secara otomatis.
+    """
     vectorstore = Chroma(
         persist_directory=CHROMA_PERSIST_DIR,
         embedding_function=get_embeddings(),
         collection_name="icicos_sop",
     )
-    # Gunakan LocalFileStore untuk menyimpan parent document secara persisten
-    store = LocalFileStore(PARENT_STORE_DIR)
+    # Buat direktori parent_store jika belum ada
+    Path(PARENT_STORE_DIR).mkdir(parents=True, exist_ok=True)
+    
+    # LocalFileStore menyimpan bytes ke disk.
+    # create_kv_docstore membungkusnya agar bisa menyimpan/membaca objek Document secara transparan.
+    raw_store = LocalFileStore(PARENT_STORE_DIR)
+    docstore = create_kv_docstore(raw_store)
     
     child_splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE,
@@ -140,7 +150,7 @@ def get_parent_document_retriever() -> ParentDocumentRetriever:
     
     return ParentDocumentRetriever(
         vectorstore=vectorstore,
-        docstore=store,
+        docstore=docstore,
         child_splitter=child_splitter,
     )
 

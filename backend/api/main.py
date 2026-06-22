@@ -8,6 +8,12 @@ Cara menjalankan (dari folder backend/):
   uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
 """
 import logging
+from pathlib import Path
+
+from dotenv import load_dotenv
+# Secara eksplisit memuat .env agar os.getenv() di modul lain bisa membacanya
+_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+load_dotenv(dotenv_path=_ENV_FILE, override=True)
 
 from contextlib import asynccontextmanager
 

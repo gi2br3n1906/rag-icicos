@@ -6,7 +6,6 @@ import App from './App.vue'
 import './assets/main.css'
 
 // ─── Axios global configuration ────────────────────────────────────────────
-axios.defaults.baseURL = 'http://localhost:8000'
 axios.defaults.headers.common['Content-Type'] = 'application/json'
 
 // Optional: request interceptor (e.g., attach auth token in the future)

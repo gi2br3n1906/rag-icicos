@@ -29,6 +29,15 @@ Rules:
 4. If the latest message is already self-contained and clear (no ambiguous references), output it UNCHANGED.
 5. Output language must match the original language of the latest user message.
 
+Examples:
+History: User: "What is the fee for international author?" -> Assistant: "It is $150."
+Latest: "how about local?"
+Rewritten: How about the fee for local author?
+
+History: User: "Cara daftar ICICoS gimana?" -> Assistant: "Bisa via website."
+Latest: "terus bayarnya ke mana?"
+Rewritten: Terus bayar pendaftaran ICICoS ke mana?
+
 Conversation History:
 {history}
 

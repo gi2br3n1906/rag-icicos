@@ -45,7 +45,8 @@ Analyze the user's question and return a JSON object describing the routing deci
 - "OTHER": The question is off-topic, a greeting, or completely unrelated to ICICoS 2026.
 
 **Ambiguity rule (CRITICAL for SOP only):**
-If intent is "SOP" but the question is too vague/general to identify WHICH specific SOP to use (e.g., "how to register?" without specifying participant category like local/international, author/non-author), set "is_ambiguous" to true and provide a "clarification_question" in the same language as the user's question.
+**Ambiguity rule (CRITICAL for SOP only):**
+If intent is "SOP" but the question is too vague/general to identify WHICH specific SOP to use (e.g., "how to register?" without specifying participant category like local/international, author/non-author), set "is_ambiguous" to true and provide a "clarification_question" ALWAYS IN ENGLISH.
 
 **Output format (JSON only, no other text):**
 {{

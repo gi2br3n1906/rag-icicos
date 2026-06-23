@@ -303,7 +303,7 @@ async def delete_document(
     # 2. Hapus embedding dari ChromaDB (dijalankan di thread terpisah agar non-blocking)
     try:
         def sync_delete_chroma(fname: str):
-            from langchain_community.vectorstores import Chroma
+            from langchain_chroma import Chroma
             from backend.rag.ingestion import get_embeddings, CHROMA_PERSIST_DIR
             
             embeddings = get_embeddings()
@@ -376,7 +376,7 @@ async def get_document_chunks(
     # 2. Query ke ChromaDB secara asinkron
     try:
         def sync_get_chunks(fname: str):
-            from langchain_community.vectorstores import Chroma
+            from langchain_chroma import Chroma
             from backend.rag.ingestion import get_embeddings, CHROMA_PERSIST_DIR
             
             embeddings = get_embeddings()
@@ -615,7 +615,7 @@ async def delete_pending_faq(
     if faq.status == "approved":
         try:
             def sync_delete_faq(fid: int):
-                from langchain_community.vectorstores import Chroma
+                from langchain_chroma import Chroma
                 from backend.rag.ingestion import get_embeddings, CHROMA_PERSIST_DIR
                 
                 embeddings = get_embeddings()
@@ -678,7 +678,7 @@ async def approve_single_faq(
     # 1. Ingest ke ChromaDB
     try:
         def sync_embed_faq(fid: int, q: str, a: str, src: str, cat: str):
-            from langchain_community.vectorstores import Chroma
+            from langchain_chroma import Chroma
             from langchain_core.documents import Document
             from backend.rag.ingestion import get_embeddings, CHROMA_PERSIST_DIR
             
@@ -767,7 +767,7 @@ async def approve_all_faqs(
     # 1. Ingest bulk ke ChromaDB
     try:
         def sync_embed_faqs_bulk(items: List[Dict[str, Any]]):
-            from langchain_community.vectorstores import Chroma
+            from langchain_chroma import Chroma
             from langchain_core.documents import Document
             from backend.rag.ingestion import get_embeddings, CHROMA_PERSIST_DIR
             

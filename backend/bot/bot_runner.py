@@ -13,7 +13,7 @@ import os
 from dotenv import load_dotenv
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
-from backend.bot.handlers import handle_message, help_command, start_command
+from backend.bot.handlers import handle_message, help_command, start_command, reset_command
 
 # Muat .env di awal — override=True WAJIB agar perubahan .env selalu
 # menimpa env var yang mungkin sudah ada di shell/sistem dari sesi sebelumnya.
@@ -42,6 +42,7 @@ def create_application() -> Application:
     # Registrasi command handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("reset", reset_command))
 
     # Registrasi message handler (semua teks yang bukan command)
     # Filter: hanya pesan teks biasa, abaikan command (/start, /help, dll.)

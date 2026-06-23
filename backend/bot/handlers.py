@@ -148,6 +148,30 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text(help_text, parse_mode="HTML")
 
 
+async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handler for the /reset command. Clears the user's chat history from the database."""
+    user = update.effective_user
+    
+    try:
+        from backend.api.database import AsyncSessionLocal
+        from backend.api.models import ChatLog
+        from sqlalchemy import delete
+        
+        async with AsyncSessionLocal() as session:
+            stmt = delete(ChatLog).where(ChatLog.user_id == str(user.id))
+            await session.execute(stmt)
+            await session.commit()
+            
+        logger.info(f"[Bot] Histori chat di-reset untuk user {user.id}")
+        await update.message.reply_text(
+            "✅ <b>Your chat history has been cleared!</b>\n"
+            "I have forgotten our previous conversation context. We can start fresh!",
+            parse_mode="HTML"
+        )
+    except Exception as exc:
+        logger.error(f"[Bot] Gagal mereset histori untuk user {user.id}: {exc}", exc_info=True)
+        await update.message.reply_text("⚠️ Sorry, I encountered an error while trying to reset your chat history.")
+
 # ---------------------------------------------------------------------------
 # Message Handler Utama
 # ---------------------------------------------------------------------------

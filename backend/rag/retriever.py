@@ -15,6 +15,7 @@ from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
 from langchain.retrievers import ParentDocumentRetriever
 from langchain.storage import LocalFileStore
+from langchain.storage._lc_store import create_kv_docstore
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 from backend.rag.ingestion import get_embeddings, CHUNK_SIZE, CHUNK_OVERLAP
@@ -60,14 +61,16 @@ def retrieve_sop(query: str) -> Tuple[Optional[Document], float]:
 
     try:
         vectorstore = _get_sop_vectorstore()
-        store = LocalFileStore(PARENT_STORE_DIR)
+        raw_store = LocalFileStore(PARENT_STORE_DIR)
+        docstore = create_kv_docstore(raw_store)
+        
         child_splitter = RecursiveCharacterTextSplitter(
             chunk_size=CHUNK_SIZE,
             chunk_overlap=CHUNK_OVERLAP,
         )
         parent_retriever = ParentDocumentRetriever(
             vectorstore=vectorstore,
-            docstore=store,
+            docstore=docstore,
             child_splitter=child_splitter,
         )
 

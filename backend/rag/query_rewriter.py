@@ -64,7 +64,10 @@ def rewrite_query(query: str, history_text: str) -> str:
 
     # Gunakan model yang ringan dan cepat untuk tugas rewriting ini
     model_name = os.getenv("GEMINI_FAST_MODEL", "gemini-2.0-flash")
-    model = genai.GenerativeModel(model_name)
+    model = genai.GenerativeModel(
+        model_name,
+        system_instruction="You are a strict query reformulation bot. Output ONLY the rewritten question as a single sentence. NO explanations, NO markdown, NO preambles like 'Context: '. If no rewrite is needed, output the original query verbatim."
+    )
 
     prompt = QUERY_REWRITER_PROMPT.format(history=history_text, query=query)
 

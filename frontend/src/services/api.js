@@ -99,5 +99,11 @@ export const approveSingleFAQ = (id) => api.post(`/api/whatsapp/pending/${id}/ap
 /** POST /api/whatsapp/approve-all */
 export const approveAllFAQs = () => api.post('/api/whatsapp/approve-all')
 
+/** GET /api/whatsapp/export */
+export const exportFaqs = (status) => api.get('/api/whatsapp/export', {
+  params: { status_filter: status },
+  responseType: 'blob', // Penting untuk file download
+})
+
 /** POST /api/knowledge/reset — wipes ChromaDB and all DB records (destructive!) */
 export const resetKnowledgeBase = () => api.post('/api/knowledge/reset')

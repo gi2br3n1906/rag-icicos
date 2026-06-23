@@ -11,13 +11,15 @@ import {
   updatePendingFAQ,
   deletePendingFAQ,
   approveSingleFAQ,
-  approveAllFAQs
+  approveAllFAQs,
+  exportFaqs
 } from '@/services/api'
 
 // --- State ---
 const faqs = ref([])
 const isFetching = ref(false)
 const fetchError = ref(null)
+const isExporting = ref(false)
 
 const isDragging = ref(false)
 const isUploading = ref(false)
@@ -270,6 +272,25 @@ async function approveAll() {
     isProcessingAll.value = false
   }
 }
+
+async function handleExport(status) {
+  isExporting.value = true
+  try {
+    const response = await exportFaqs(status)
+    const url = window.URL.createObjectURL(new Blob([response.data]))
+    const link = document.createElement('a')
+    link.href = url
+    link.setAttribute('download', `faq_export_${status}.pdf`)
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+  } catch (err) {
+    console.error('[WhatsAppReview] Failed to export FAQs:', err)
+    alert('Failed to export FAQs to PDF.')
+  } finally {
+    isExporting.value = false
+  }
+}
 </script>
 
 <template>
@@ -283,8 +304,27 @@ async function approveAll() {
         </p>
       </div>
 
-      <!-- Live badge/Refresh -->
+      <!-- Live badge/Refresh & Export -->
       <div class="flex items-center gap-3 shrink-0">
+        
+        <!-- Export PDF Dropdown -->
+        <div class="relative group">
+          <button
+            :disabled="isExporting"
+            class="text-xs text-slate-500 hover:text-slate-700 bg-white border border-gray-200 px-3 py-1.5 rounded-xl transition flex items-center gap-1 disabled:opacity-50"
+          >
+            <svg v-if="isExporting" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5 animate-spin"><path fill-rule="evenodd" d="M15.312 11.424a5.5 5.5 0 0 1-9.201 2.466l-.312-.311h2.433a.75.75 0 0 0 0-1.5H3.989a.75.75 0 0 0-.75.75v4.242a.75.75 0 0 0 1.5 0v-2.43l.31.31a7 7 0 0 0 11.712-3.138.75.75 0 0 0-1.449-.39Zm1.23-3.723a.75.75 0 0 0 .219-.53V2.929a.75.75 0 0 0-1.5 0V5.36l-.31-.31A7 7 0 0 0 3.239 8.188a.75.75 0 1 0 1.448.389A5.5 5.5 0 0 1 13.89 6.11l.311.31h-2.432a.75.75 0 0 0 0 1.5h4.243a.75.75 0 0 0 .53-.219Z" clip-rule="evenodd" /></svg>
+            <svg v-else xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5"><path fill-rule="evenodd" d="M10 3a.75.75 0 0 1 .75.75v10.638l3.96-4.158a.75.75 0 1 1 1.08 1.04l-5.25 5.5a.75.75 0 0 1-1.08 0l-5.25-5.5a.75.75 0 1 1 1.08-1.04l3.96 4.158V3.75A.75.75 0 0 1 10 3Z" clip-rule="evenodd" /></svg>
+            Export PDF
+          </button>
+          
+          <div class="absolute right-0 mt-1 w-36 bg-white border border-gray-100 rounded-xl shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10 py-1">
+            <button @click="handleExport('all')" class="w-full text-left px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50 hover:text-indigo-600">Export All</button>
+            <button @click="handleExport('pending')" class="w-full text-left px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50 hover:text-indigo-600">Export Pending</button>
+            <button @click="handleExport('approved')" class="w-full text-left px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50 hover:text-indigo-600">Export Accepted</button>
+          </div>
+        </div>
+
         <button
           v-if="isPolling"
           @click="stopPolling"

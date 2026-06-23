@@ -28,9 +28,10 @@ sentence-transformers==3.3.1    # intfloat/multilingual-e5-small
 torch>=2.0.0                    # Backend untuk sentence-transformers (CPU)
 transformers>=4.41.0
 
-# --- Document Parsing ---
+# --- Document Parsing & Generation ---
 pypdf==5.1.0                    # Parsing file PDF (SOP)
 python-docx==1.1.2              # Parsing file DOCX jika dibutuhkan
+fpdf2==2.8.1                    # Generate PDF exports
 
 # --- Database (PostgreSQL) ---
 sqlalchemy==2.0.36              # ORM untuk log chat & data admin

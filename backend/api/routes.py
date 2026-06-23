@@ -11,8 +11,10 @@ import logging
 import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import io
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status, BackgroundTasks
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status, BackgroundTasks, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -582,6 +584,73 @@ async def update_pending_faq(
             "category": faq.category,
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Endpoint 8b: GET /api/whatsapp/export
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/whatsapp/export",
+    summary="Export FAQs to PDF",
+    response_description="File PDF berisi data FAQ",
+)
+async def export_faqs_pdf(
+    status_filter: str = Query("all", description="Filter by status: all, pending, or approved"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Menghasilkan file PDF dari daftar FAQ berdasarkan status yang dipilih.
+    """
+    from fpdf import FPDF
+
+    stmt = select(WhatsAppFAQ)
+    if status_filter.lower() != "all":
+        stmt = stmt.where(WhatsAppFAQ.status == status_filter.lower())
+    
+    stmt = stmt.order_by(WhatsAppFAQ.created_at.desc())
+    result = await db.execute(stmt)
+    faqs = result.scalars().all()
+    
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    
+    # Title
+    pdf.set_font("helvetica", "B", 16)
+    title_suffix = status_filter.capitalize() if status_filter.lower() != "all" else "All"
+    pdf.cell(0, 10, f"ICICoS 2026 - FAQ Export ({title_suffix})", ln=True, align='C')
+    pdf.ln(10)
+    
+    pdf.set_font("helvetica", size=11)
+    
+    if not faqs:
+        pdf.cell(0, 10, "No FAQs found for this status.", ln=True)
+    else:
+        for idx, faq in enumerate(faqs, 1):
+            pdf.set_font("helvetica", "B", 11)
+            # multi_cell to handle long text
+            pdf.multi_cell(0, 8, f"Q{idx}: {faq.question}")
+            
+            pdf.set_font("helvetica", "", 10)
+            pdf.multi_cell(0, 6, f"A: {faq.answer}")
+            
+            pdf.set_text_color(100, 100, 100)
+            pdf.set_font("helvetica", "I", 9)
+            pdf.cell(0, 6, f"Category: {faq.category} | Status: {faq.status}", ln=True)
+            pdf.set_text_color(0, 0, 0)
+            pdf.ln(5)
+            
+    # Output
+    # fpdf2 outputs a bytearray when output() is called without arguments
+    pdf_bytes = pdf.output()
+    stream = io.BytesIO(bytes(pdf_bytes))
+    
+    return StreamingResponse(
+        stream,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="faq_export_{status_filter}.pdf"'}
+    )
 
 
 # ---------------------------------------------------------------------------

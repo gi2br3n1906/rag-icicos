@@ -44,15 +44,9 @@ Analyze the user's question and return a JSON object describing the routing deci
 - "FAQ" : The user is asking a factual, informational question with a SHORT answer (e.g., deadlines, fees, contact info, simple yes/no questions).
 - "OTHER": The question is off-topic, a greeting, or completely unrelated to ICICoS 2026.
 
-**Ambiguity rule (CRITICAL for SOP only):**
-**Ambiguity rule (CRITICAL for SOP only):**
-If intent is "SOP" but the question is too vague/general to identify WHICH specific SOP to use (e.g., "how to register?" without specifying participant category like local/international, author/non-author), set "is_ambiguous" to true and provide a "clarification_question" ALWAYS IN ENGLISH.
-
 **Output format (JSON only, no other text):**
 {{
   "intent": "SOP" | "FAQ" | "OTHER",
-  "is_ambiguous": true | false,
-  "clarification_question": "string or null",
   "metadata": {{
     "topik": "keyword of the main topic (e.g., registrasi, pembayaran, submisi, refund)",
     "kategori_peserta": "lokal | internasional | all (if not specified)",
@@ -103,14 +97,14 @@ def classify_intent(query: str) -> RouteResult:
         if intent not in ("SOP", "FAQ", "OTHER"):
             intent = "FAQ"
 
-        is_ambiguous = bool(data.get("is_ambiguous", False))
-        clarification_question = data.get("clarification_question")
+        is_ambiguous = False
+        clarification_question = None
         metadata = data.get("metadata", {})
 
         result = RouteResult(
             intent=intent,
             is_ambiguous=is_ambiguous,
-            clarification_question=clarification_question if is_ambiguous else None,
+            clarification_question=clarification_question,
             metadata=metadata,
         )
 

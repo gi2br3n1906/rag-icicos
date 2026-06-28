@@ -108,7 +108,17 @@ def retrieve_sop(query: str) -> Tuple[Optional[Document], float]:
         return parent_doc, best_score
 
     except Exception as e:
-        logger.error(f"[Retriever-SOP] Error saat retrieval: {e}", exc_info=True)
+        if "ValidationError" in type(e).__name__ or "validation error" in str(e).lower():
+            logger.error(
+                "[Retriever-SOP] 🚨 CRITICAL: Database corruption detected in ChromaDB! "
+                "Some documents in the 'icicos_sop' collection have null page content. "
+                "To fix this, please run 'python poc_rag.py --reset' and re-ingest your documents, "
+                "or trigger the POST /api/knowledge/reset endpoint. "
+                f"Original error: {e}",
+                exc_info=True
+            )
+        else:
+            logger.error(f"[Retriever-SOP] Error saat retrieval: {e}", exc_info=True)
         return None, 0.0
 
 
@@ -140,5 +150,15 @@ def retrieve_faq(query: str) -> Tuple[List[Document], float]:
         return docs, best_score
 
     except Exception as e:
-        logger.error(f"[Retriever-FAQ] Error saat retrieval: {e}", exc_info=True)
+        if "ValidationError" in type(e).__name__ or "validation error" in str(e).lower():
+            logger.error(
+                "[Retriever-FAQ] 🚨 CRITICAL: Database corruption detected in ChromaDB! "
+                "Some documents in the 'icicos_faq' collection have null page content. "
+                "To fix this, please run 'python poc_rag.py --reset' and re-ingest your documents, "
+                "or trigger the POST /api/knowledge/reset endpoint. "
+                f"Original error: {e}",
+                exc_info=True
+            )
+        else:
+            logger.error(f"[Retriever-FAQ] Error saat retrieval: {e}", exc_info=True)
         return [], 0.0

@@ -172,12 +172,16 @@ async def upload_document(
             detail="Hanya file PDF yang didukung. Pastikan ekstensi file adalah .pdf",
         )
 
+    import time
+    timestamp = int(time.time())
+    safe_filename = f"{Path(file.filename).stem}_{timestamp}.pdf"
+
     # --- [SIMPAN] File sementara ke disk ---
     _DOCS_DIR.mkdir(parents=True, exist_ok=True)
-    file_path = _DOCS_DIR / file.filename
+    file_path = _DOCS_DIR / safe_filename
 
     try:
-        logger.info(f"[Upload] Menyimpan file '{file.filename}' ke {file_path}")
+        logger.info(f"[Upload] Menyimpan file '{file.filename}' sebagai '{safe_filename}' ke {file_path}")
         with file_path.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
     except OSError as io_exc:
@@ -254,19 +258,18 @@ async def upload_document(
         logger.error(
             f"[Upload] Gagal menyimpan record ke database: {db_exc}", exc_info=True
         )
-        # Ingesti sudah berhasil, jadi kembalikan partial success
         return {
             "status": "partial_success",
             "message": "Ingesti ke ChromaDB berhasil, tetapi gagal mencatat ke database.",
-            "filename": file.filename,
+            "filename": safe_filename,
             "total_chunks": total_chunks,
             "document_id": None,
         }
 
     return {
         "status": "success",
-        "message": f"Dokumen '{file.filename}' berhasil di-ingest dan dicatat.",
-        "filename": file.filename,
+        "message": f"Dokumen '{safe_filename}' berhasil di-ingest dan dicatat.",
+        "filename": safe_filename,
         "total_chunks": total_chunks,
         "document_id": new_doc.id,
         "ingested_at": new_doc.ingested_at.isoformat() if new_doc.ingested_at else None,
@@ -624,22 +627,28 @@ async def export_faqs_pdf(
     
     pdf.set_font("helvetica", size=11)
     
+    import textwrap
+    
     if not faqs:
         pdf.cell(0, 10, "No FAQs found for this status.", ln=True)
     else:
         for idx, faq in enumerate(faqs, 1):
+            pdf.set_x(pdf.l_margin)
             pdf.set_font("helvetica", "B", 11)
-            # multi_cell to handle long text
-            pdf.multi_cell(0, 8, f"Q{idx}: {faq.question}")
+            q_wrapped = textwrap.fill(f"Q{idx}: {faq.question or ''}", width=75, break_long_words=True)
+            pdf.multi_cell(pdf.epw, 8, q_wrapped)
             
+            pdf.set_x(pdf.l_margin)
             pdf.set_font("helvetica", "", 10)
-            pdf.multi_cell(0, 6, f"A: {faq.answer}")
+            a_wrapped = textwrap.fill(f"A: {faq.answer or ''}", width=75, break_long_words=True)
+            pdf.multi_cell(pdf.epw, 6, a_wrapped)
             
+            pdf.set_x(pdf.l_margin)
             pdf.set_text_color(100, 100, 100)
             pdf.set_font("helvetica", "I", 9)
-            pdf.cell(0, 6, f"Category: {faq.category} | Status: {faq.status}", ln=True)
+            pdf.cell(pdf.epw, 6, f"Category: {faq.category or 'Uncategorized'} | Status: {faq.status}")
             pdf.set_text_color(0, 0, 0)
-            pdf.ln(5)
+            pdf.ln(11)
             
     # Output
     # fpdf2 outputs a bytearray when output() is called without arguments

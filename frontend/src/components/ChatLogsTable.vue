@@ -57,7 +57,7 @@ const filteredLogs = computed(() => {
   return logs.value.filter(
     (log) =>
       (log.userId ?? log.user_id ?? '').toLowerCase().includes(q) ||
-      (log.question ?? '').toLowerCase().includes(q),
+      (log.query ?? log.question ?? '').toLowerCase().includes(q),
   )
 })
 
@@ -216,7 +216,7 @@ function normField(log, camel, snake) {
 
             <!-- Question -->
             <td class="px-5 py-3.5 text-slate-600 max-w-xs">
-              <p class="line-clamp-2">{{ log.question }}</p>
+              <p class="line-clamp-2">{{ log.query ?? log.question }}</p>
             </td>
 
             <!-- Bot Answer – renders <b> / <i> HTML from backend safely -->

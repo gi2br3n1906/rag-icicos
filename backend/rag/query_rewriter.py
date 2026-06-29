@@ -28,6 +28,7 @@ CRITICAL INSTRUCTIONS:
 3. Replace ALL vague references (like "that", "it", "tadi", "itu") with explicit descriptions from the history.
 4. If the latest message is already self-contained, output it UNCHANGED (unless translation is needed).
 5. TRANSLATE the final rewritten question to ENGLISH if the original message is in another language (e.g., Indonesian). ALL output MUST be in ENGLISH.
+6. ABBREVIATION HANDLING: Do NOT strip or replace common acronyms (like "LoA", "eCF", "VA") with only their full name. Keep both representations or keep the acronym (e.g., use "LoA (Letter of Acceptance)" or just "LoA") to ensure proper semantic search matching.
 
 Conversation History:
 {history}

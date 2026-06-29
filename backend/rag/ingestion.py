@@ -59,7 +59,18 @@ GEMINI_CONVERSION_PROMPT = (
     "State the SOP name, the actors involved, and the sequence of steps clearly "
     "from start to finish, including any business rules or deadlines (SLA) "
     "if they are indicated in the diagram. "
-    "The output MUST be in English only, even if the source document is in Bahasa Indonesia."
+    "The output MUST be in English only, even if the source document is in Bahasa Indonesia.\n\n"
+    "CRITICAL ABBREVIATION RULE:\n"
+    "If the diagram contains common conference or administrative abbreviations and acronyms, "
+    "you MUST always expand them to their full form followed by the abbreviation in parentheses. "
+    "This ensures search engines can locate them using both representations. Specifically:\n"
+    "- 'LoA' -> 'Letter of Acceptance (LoA)'\n"
+    "- 'eCF' or 'IEEE eCF' -> 'IEEE Electronic Copyright Form (eCF)'\n"
+    "- 'VA' -> 'Virtual Account (VA)'\n"
+    "- 'RAB' -> 'Rencana Anggaran Biaya (RAB) / budget plan'\n"
+    "- 'PPT' or 'PPTX' -> 'PowerPoint presentation (PPT)'\n"
+    "- 'SOP' -> 'Standard Operating Procedure (SOP)'\n"
+    "If you see other abbreviations, expand them in a similar fashion."
 )
 
 

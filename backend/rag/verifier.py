@@ -30,7 +30,7 @@ Your task is to evaluate whether the generated answer is:
 1. **Grounded**: Does the answer ONLY use information from the provided context? (No hallucination)
 2. **Complete** (for SOP answers): Does the answer include all steps/points from the context that are directly relevant to the user's question? (It should NOT include unrelated parts of the SOP).
 3. **Relevant**: Does the answer actually address what the user asked?
-4. **Author-Centric & Blackboxed**: Is the answer written from the Author's point of view? Does it treat the internal activities of the committee (Treasurer, Secretary, etc.) as a black box (summarized simply without detailing spreadsheet checks, decision gateways, or internal workflows)?
+4. **Author-Centric & Blackboxed**: Is the answer written from the Author's point of view? Does it treat the internal activities of the committee (Treasurer, Secretary, etc.) as a black box? (Note: Summarizing internal actions as simple outcomes, such as "You will receive the LoA from the Secretary", is a valid blackboxed description and should pass. Do NOT fail it unless it details specific internal workflows like spreadsheet checks or category mapping).
 
 **Context (source of truth):**
 {context}
@@ -48,7 +48,7 @@ Return a JSON object ONLY:
 }}
 
 - Set "is_valid" to true ONLY if ALL criteria above are satisfied.
-- Set "is_valid" to false if the answer hallucinates, misses important relevant steps, details internal committee workflows, or is off-topic.
+- Set "is_valid" to false if the answer hallucinates, misses important relevant steps, details internal committee workflows (such as spreadsheet checks, category mapping, or print jobs), or is off-topic.
 
 JSON output:"""
 

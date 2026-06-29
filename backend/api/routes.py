@@ -173,8 +173,12 @@ async def upload_document(
         )
 
     import time
+    import re
     timestamp = int(time.time())
-    safe_filename = f"{Path(file.filename).stem}_{timestamp}.pdf"
+    # Bersihkan nama file dari karakter tidak aman (spasi, tanda kurung, dll) untuk key docstore
+    clean_stem = re.sub(r"[^a-zA-Z0-9_\-]", "_", Path(file.filename).stem)
+    clean_stem = re.sub(r"__+", "_", clean_stem).strip("_")
+    safe_filename = f"{clean_stem}_{timestamp}.pdf"
 
     # --- [SIMPAN] File sementara ke disk ---
     _DOCS_DIR.mkdir(parents=True, exist_ok=True)

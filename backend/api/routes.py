@@ -243,7 +243,7 @@ async def upload_document(
     # --- [DB] Catat hasil ingesti ke tabel documents ---
     try:
         new_doc = Document(
-            filename=file.filename,
+            filename=safe_filename,
             total_chunks=total_chunks,
             status="success",
         )

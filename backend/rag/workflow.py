@@ -5,27 +5,30 @@ Ini adalah otak utama dari Bulletproof Agentic RAG. Menggantikan chain.py
 yang menggunakan alur linear. Setiap langkah dimodelkan sebagai Node dalam
 sebuah State Machine (Graf berarah).
 
-Alur Utama:
+Alur Utama (Late Routing - Parallel Retrieval):
   START
     └─► [node_rewrite_query]   : Reformulasi query menggunakan histori chat
-          └─► [node_route]     : Klasifikasi intent (SOP / FAQ / OTHER)
-                ├─► [node_ask_clarification]  : (jika ambigu) Kirim pertanyaan klarifikasi
-                ├─► [node_retrieve_sop]       : (SOP) Ambil 1 Parent Document utuh
-                │     └─► [node_generate_sop] → [node_verify] → END
-                ├─► [node_retrieve_faq]       : (FAQ) Ambil FAQ chunks relevan
-                │     └─► [node_generate_faq] → [node_verify] → END
-                └─► [node_fallback]           : (OTHER / no result) Pesan fallback
-                      └─► END
+          └─► [node_route]     : Parallel retrieval SOP & FAQ, routing berdasarkan skor
+                ├─► [node_generate_sop] → [node_verify] → END  (SOP ditemukan)
+                ├─► [node_generate_faq] → [node_verify] → END  (hanya FAQ ditemukan)
+                └─► [node_fallback]                    → END  (tidak ada)
+
+Pendekatan Late Routing (menggantikan LLM-based Router):
+  - SOP dan FAQ diretrieval secara PARALEL di node_route menggunakan asyncio.gather.
+  - Intent ditentukan secara deterministik berdasarkan similarity score (threshold 0.4):
+    * SOP saja    → generate_sop
+    * FAQ saja    → generate_faq
+    * Keduanya    → generate_sop, has_both=True (bot lampirkan tombol "Show FAQ Answer")
+    * Tidak ada   → fallback
 
 State yang dibawa sepanjang workflow:
   - user_id         : ID user untuk mengambil histori dari DB
   - original_query  : Pertanyaan asli user (tidak dimodifikasi)
   - rewritten_query : Pertanyaan setelah direformulasi
   - intent          : "SOP" | "FAQ" | "OTHER"
-  - is_ambiguous    : Apakah perlu klarifikasi?
-  - clarification   : Pertanyaan klarifikasi yang akan dikirim ke user
   - sop_doc         : Parent Document SOP hasil retrieval
   - faq_docs        : FAQ chunk list hasil retrieval
+  - has_both        : True jika query ditemukan di KEDUA database (SOP & FAQ)
   - context_str     : String konteks untuk Verifier
   - answer          : Jawaban final
   - similarity_score: Skor terbaik dari retrieval
@@ -33,8 +36,7 @@ State yang dibawa sepanjang workflow:
 """
 import asyncio
 import logging
-from functools import partial
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, List, Optional, TypedDict
 
 from langchain_core.documents import Document
 from langgraph.graph import END, StateGraph
@@ -47,10 +49,12 @@ from backend.rag.generator import (
 from backend.rag.memory import format_history_for_prompt, get_recent_history
 from backend.rag.query_rewriter import rewrite_query
 from backend.rag.retriever import retrieve_faq, retrieve_sop
-from backend.rag.router import RouteResult, classify_intent
 from backend.rag.verifier import verify_answer
 
 logger = logging.getLogger(__name__)
+
+# Threshold minimum similarity score agar retrieval dianggap relevan
+RETRIEVAL_THRESHOLD = 0.4
 
 
 # ---------------------------------------------------------------------------
@@ -62,15 +66,14 @@ class AgentState(TypedDict):
     user_id: str
     original_query: str
     rewritten_query: str
-    intent: str
-    is_ambiguous: bool
-    clarification: Optional[str]
+    intent: str                   # "SOP" | "FAQ" | "OTHER"
     sop_doc: Optional[Document]
     faq_docs: List[Document]
+    has_both: bool                # True jika ditemukan di kedua database
     context_str: str
     answer: str
     similarity_score: float
-    db_session: Any  # AsyncSession — tidak bisa di-type-hint ketat di TypedDict
+    db_session: Any               # AsyncSession — tidak bisa di-type-hint ketat di TypedDict
 
 
 # ---------------------------------------------------------------------------
@@ -102,74 +105,78 @@ async def node_rewrite_query(state: AgentState) -> AgentState:
 
 async def node_route(state: AgentState) -> AgentState:
     """
-    Node 2: Intent Router.
-    Mengklasifikasikan pertanyaan (sudah direformulasi) menjadi SOP / FAQ / OTHER
-    dan mendeteksi apakah diperlukan klarifikasi lebih lanjut.
-    """
-    logger.info("[Workflow] ► Node: route")
+    Node 2: Parallel Retrieval + Late Routing.
 
-    result: RouteResult = await asyncio.to_thread(
-        classify_intent, state["rewritten_query"]
+    Menggantikan LLM-based Router dengan pendekatan deterministik:
+    1. Retrieval SOP dan FAQ dijalankan secara PARALEL menggunakan asyncio.gather.
+    2. Intent ditentukan berdasarkan similarity score dari hasil retrieval:
+       - score_sop >= 0.4 DAN score_faq >= 0.4 → intent=SOP, has_both=True
+       - Hanya score_sop >= 0.4                 → intent=SOP, has_both=False
+       - Hanya score_faq >= 0.4                 → intent=FAQ, has_both=False
+       - Tidak ada yang memenuhi threshold       → intent=OTHER
+
+    Keuntungan: tidak ada mismatch klasifikasi karena routing didasarkan pada
+    data yang benar-benar ada di database, bukan prediksi LLM.
+    """
+    logger.info("[Workflow] ► Node: route (Parallel Retrieval)")
+
+    query = state["rewritten_query"]
+
+    # Jalankan retrieval SOP dan FAQ secara paralel
+    (sop_doc, score_sop), (faq_docs, score_faq) = await asyncio.gather(
+        asyncio.to_thread(retrieve_sop, query),
+        asyncio.to_thread(retrieve_faq, query),
     )
+
+    sop_available = sop_doc is not None and score_sop >= RETRIEVAL_THRESHOLD
+    faq_available = len(faq_docs) > 0 and score_faq >= RETRIEVAL_THRESHOLD
+
+    # Tentukan intent dan has_both secara deterministik
+    if sop_available and faq_available:
+        intent = "SOP"
+        has_both = True
+        similarity_score = score_sop  # Gunakan skor SOP sebagai primary score
+        context_str = sop_doc.page_content
+        logger.info(
+            f"[Workflow] Late Routing: BOTH found. "
+            f"SOP score={score_sop:.4f}, FAQ score={score_faq:.4f} → intent=SOP, has_both=True"
+        )
+    elif sop_available:
+        intent = "SOP"
+        has_both = False
+        similarity_score = score_sop
+        context_str = sop_doc.page_content
+        logger.info(f"[Workflow] Late Routing: SOP only. score={score_sop:.4f} → intent=SOP")
+    elif faq_available:
+        intent = "FAQ"
+        has_both = False
+        similarity_score = score_faq
+        context_str = "\n\n---\n\n".join(d.page_content for d in faq_docs)
+        logger.info(f"[Workflow] Late Routing: FAQ only. score={score_faq:.4f} → intent=FAQ")
+    else:
+        intent = "OTHER"
+        has_both = False
+        similarity_score = max(score_sop, score_faq)
+        context_str = ""
+        logger.info(
+            f"[Workflow] Late Routing: Nothing found. "
+            f"SOP={score_sop:.4f}, FAQ={score_faq:.4f} → fallback"
+        )
 
     return {
         **state,
-        "intent": result.intent,
-        "is_ambiguous": result.is_ambiguous,
-        "clarification": result.clarification_question,
+        "intent": intent,
+        "sop_doc": sop_doc,
+        "faq_docs": faq_docs,
+        "has_both": has_both,
+        "similarity_score": similarity_score,
+        "context_str": context_str,
     }
-
-
-async def node_ask_clarification(state: AgentState) -> AgentState:
-    """
-    Node 3a: Clarification Request.
-    Jika pertanyaan SOP terlalu ambigu, bot mengembalikan pertanyaan klarifikasi
-    ke user tanpa melakukan pencarian database sama sekali.
-    """
-    logger.info("[Workflow] ► Node: ask_clarification (Ambigu terdeteksi)")
-    clarification_msg = state.get("clarification") or (
-        "Your question covers multiple scenarios. Could you please clarify which "
-        "specific procedure or participant category you are asking about?"
-    )
-    return {**state, "answer": clarification_msg, "similarity_score": 0.0}
-
-
-async def node_retrieve_sop(state: AgentState) -> AgentState:
-    """
-    Node 3b: SOP Retrieval.
-    Mengambil SATU dokumen SOP utuh menggunakan ParentDocumentRetriever.
-    Jaminan: Tidak ada cross-contamination antar SOP.
-    """
-    logger.info("[Workflow] ► Node: retrieve_sop")
-
-    sop_doc, score = await asyncio.to_thread(
-        retrieve_sop, state["rewritten_query"]
-    )
-
-    context_str = sop_doc.page_content if sop_doc else ""
-
-    return {**state, "sop_doc": sop_doc, "similarity_score": score, "context_str": context_str}
-
-
-async def node_retrieve_faq(state: AgentState) -> AgentState:
-    """
-    Node 3c: FAQ Retrieval.
-    Mengambil beberapa FAQ chunk yang relevan dari koleksi histori WhatsApp.
-    """
-    logger.info("[Workflow] ► Node: retrieve_faq")
-
-    faq_docs, score = await asyncio.to_thread(
-        retrieve_faq, state["rewritten_query"]
-    )
-
-    context_str = "\n\n---\n\n".join(d.page_content for d in faq_docs) if faq_docs else ""
-
-    return {**state, "faq_docs": faq_docs, "similarity_score": score, "context_str": context_str}
 
 
 async def node_generate_sop(state: AgentState) -> AgentState:
     """
-    Node 4a: SOP Generator.
+    Node 3a: SOP Generator.
     Menghasilkan jawaban langkah-demi-langkah yang lengkap menggunakan SOP_SYSTEM_PROMPT.
     """
     logger.info("[Workflow] ► Node: generate_sop")
@@ -188,7 +195,7 @@ async def node_generate_sop(state: AgentState) -> AgentState:
 
 async def node_generate_faq(state: AgentState) -> AgentState:
     """
-    Node 4b: FAQ Generator.
+    Node 3b: FAQ Generator.
     Menghasilkan jawaban singkat (maks 3 kalimat) menggunakan FAQ_SYSTEM_PROMPT.
     """
     logger.info("[Workflow] ► Node: generate_faq")
@@ -207,7 +214,7 @@ async def node_generate_faq(state: AgentState) -> AgentState:
 
 async def node_verify(state: AgentState) -> AgentState:
     """
-    Node 5: CRAG Verifier (Penjaga Gawang Terakhir).
+    Node 4: CRAG Verifier (Penjaga Gawang Terakhir).
     Mengevaluasi jawaban yang dihasilkan sebelum dikirim ke user.
     Jika gagal → jawaban diganti dengan FALLBACK_RESPONSE.
     """
@@ -230,8 +237,7 @@ async def node_verify(state: AgentState) -> AgentState:
 async def node_fallback(state: AgentState) -> AgentState:
     """
     Node Terminal: Fallback.
-    Digunakan ketika intent = OTHER, atau ketika tidak ada dokumen relevan
-    yang ditemukan di database.
+    Digunakan ketika tidak ada dokumen relevan ditemukan di kedua database.
     """
     logger.info("[Workflow] ► Node: fallback")
     return {**state, "answer": FALLBACK_RESPONSE, "similarity_score": 0.0}
@@ -243,46 +249,22 @@ async def node_fallback(state: AgentState) -> AgentState:
 
 def route_after_router(state: AgentState) -> str:
     """
-    Menentukan node selanjutnya setelah Router menentukan intent.
+    Menentukan node selanjutnya setelah node_route menentukan intent.
+    Intent sudah ditentukan secara deterministik berdasarkan similarity score,
+    sehingga routing di sini bersifat langsung tanpa logika tambahan.
     """
     intent = state.get("intent", "OTHER")
-    is_ambiguous = state.get("is_ambiguous", False)
-
-    if intent == "OTHER":
-        logger.info("[Workflow] Edge: OTHER → fallback")
-        return "fallback"
-
-    if intent == "SOP" and is_ambiguous:
-        logger.info("[Workflow] Edge: SOP (ambigu) → ask_clarification")
-        return "ask_clarification"
 
     if intent == "SOP":
-        logger.info("[Workflow] Edge: SOP (jelas) → retrieve_sop")
-        return "retrieve_sop"
+        logger.info("[Workflow] Edge: SOP → generate_sop")
+        return "generate_sop"
 
-    # Default: FAQ
-    logger.info("[Workflow] Edge: FAQ → retrieve_faq")
-    return "retrieve_faq"
+    if intent == "FAQ":
+        logger.info("[Workflow] Edge: FAQ → generate_faq")
+        return "generate_faq"
 
-
-def route_after_retrieve_sop(state: AgentState) -> str:
-    """
-    Setelah retrieval SOP, cek apakah dokumen berhasil ditemukan.
-    """
-    if state.get("sop_doc") is None:
-        logger.info("[Workflow] Edge: SOP doc tidak ditemukan → fallback")
-        return "fallback"
-    return "generate_sop"
-
-
-def route_after_retrieve_faq(state: AgentState) -> str:
-    """
-    Setelah retrieval FAQ, cek apakah ada chunk yang relevan.
-    """
-    if not state.get("faq_docs"):
-        logger.info("[Workflow] Edge: FAQ docs tidak ditemukan → fallback")
-        return "fallback"
-    return "generate_faq"
+    logger.info("[Workflow] Edge: OTHER → fallback")
+    return "fallback"
 
 
 # ---------------------------------------------------------------------------
@@ -301,9 +283,6 @@ def build_workflow():
     # Daftarkan semua node
     graph.add_node("rewrite_query", node_rewrite_query)
     graph.add_node("route", node_route)
-    graph.add_node("ask_clarification", node_ask_clarification)
-    graph.add_node("retrieve_sop", node_retrieve_sop)
-    graph.add_node("retrieve_faq", node_retrieve_faq)
     graph.add_node("generate_sop", node_generate_sop)
     graph.add_node("generate_faq", node_generate_faq)
     graph.add_node("verify", node_verify)
@@ -313,43 +292,23 @@ def build_workflow():
     graph.set_entry_point("rewrite_query")
     graph.add_edge("rewrite_query", "route")
 
-    # Alur: Setelah Router (bercabang)
+    # Alur: Setelah Parallel Retrieval + Late Routing (bercabang)
     graph.add_conditional_edges(
         "route",
         route_after_router,
         {
             "fallback": "fallback",
-            "ask_clarification": "ask_clarification",
-            "retrieve_sop": "retrieve_sop",
-            "retrieve_faq": "retrieve_faq",
-        },
-    )
-
-    # Alur: SOP path
-    graph.add_conditional_edges(
-        "retrieve_sop",
-        route_after_retrieve_sop,
-        {
-            "fallback": "fallback",
             "generate_sop": "generate_sop",
-        },
-    )
-    graph.add_edge("generate_sop", "verify")
-
-    # Alur: FAQ path
-    graph.add_conditional_edges(
-        "retrieve_faq",
-        route_after_retrieve_faq,
-        {
-            "fallback": "fallback",
             "generate_faq": "generate_faq",
         },
     )
+
+    # Alur: Generate → Verify → END
+    graph.add_edge("generate_sop", "verify")
     graph.add_edge("generate_faq", "verify")
 
     # Alur: Terminal nodes
     graph.add_edge("verify", END)
-    graph.add_edge("ask_clarification", END)
     graph.add_edge("fallback", END)
 
     return graph.compile()
@@ -367,10 +326,10 @@ async def run_agentic_workflow(
     query: str,
     user_id: str,
     db_session: Any = None,
-) -> tuple[str, float]:
+) -> tuple[str, float, bool]:
     """
     Entry point utama untuk menjalankan seluruh Agentic Workflow.
-    Dipanggil dari bot/handlers.py sebagai pengganti run_rag_chain().
+    Dipanggil dari bot/handlers.py.
 
     Args:
         query     : Pertanyaan teks asli dari user.
@@ -379,9 +338,11 @@ async def run_agentic_workflow(
                     Opsional — jika None, Memory dinonaktifkan.
 
     Returns:
-        Tuple[str, float]:
+        Tuple[str, float, bool]:
           - str  : Jawaban final yang siap dikirim ke user.
           - float: Similarity score tertinggi dari retrieval (0.0 jika fallback).
+          - bool : has_both — True jika query ditemukan di kedua database SOP & FAQ,
+                   menandakan bot perlu melampirkan tombol "Show FAQ Answer" di Telegram.
     """
     logger.info(
         f"[Workflow] 🚀 Memulai Agentic Workflow untuk user '{user_id}': '{query[:80]}'"
@@ -390,12 +351,11 @@ async def run_agentic_workflow(
     initial_state: AgentState = {
         "user_id": user_id,
         "original_query": query,
-        "rewritten_query": query,  # Default: sama dengan asli (akan di-update Rewriter)
-        "intent": "FAQ",
-        "is_ambiguous": False,
-        "clarification": None,
+        "rewritten_query": query,   # Default: sama dengan asli (akan di-update Rewriter)
+        "intent": "OTHER",
         "sop_doc": None,
         "faq_docs": [],
+        "has_both": False,
         "context_str": "",
         "answer": FALLBACK_RESPONSE,
         "similarity_score": 0.0,
@@ -406,16 +366,17 @@ async def run_agentic_workflow(
         final_state = await compiled_workflow.ainvoke(initial_state)
         answer = final_state.get("answer", FALLBACK_RESPONSE)
         score = final_state.get("similarity_score", 0.0)
+        has_both = final_state.get("has_both", False)
 
         logger.info(
             f"[Workflow] ✅ Selesai. Score={score:.4f}, "
-            f"Panjang jawaban={len(answer)} karakter."
+            f"has_both={has_both}, Panjang jawaban={len(answer)} karakter."
         )
-        return answer, score
+        return answer, score, has_both
 
     except Exception as exc:
         logger.error(
             f"[Workflow] ❌ Error fatal pada Agentic Workflow: {exc}",
             exc_info=True,
         )
-        return FALLBACK_RESPONSE, 0.0
+        return FALLBACK_RESPONSE, 0.0, False

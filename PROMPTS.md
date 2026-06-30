@@ -2,6 +2,9 @@
 
 File ini menyimpan instruksi inti untuk generator LLM pada sistem RAG. Semua modifikasi perilaku bot harus berawal dari perubahan template di bawah ini.
 
+> **Catatan Arsitektur (Update):** LLM-based Router (`router.py`) telah **dihapus** dari pipeline aktif. Routing sekarang dilakukan secara deterministik menggunakan **Late Routing** — yaitu melakukan retrieval paralel ke SOP dan FAQ ChromaDB terlebih dahulu, lalu menentukan intent berdasarkan similarity score hasil retrieval (threshold 0.4). Hal ini menghilangkan mismatch klasifikasi intent secara fundamental.
+
+
 ## 1. Main System Prompt (RAG Generator)
 Template ini digunakan saat bot menerima pertanyaan dan telah menemukan konteks dari ChromaDB.
 

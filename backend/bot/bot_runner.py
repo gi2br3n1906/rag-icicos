@@ -11,9 +11,9 @@ import logging
 import os
 
 from dotenv import load_dotenv
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
-from backend.bot.handlers import handle_message, help_command, start_command, reset_command
+from backend.bot.handlers import handle_callback_query, handle_message, help_command, start_command, reset_command
 
 # Muat .env di awal — override=True WAJIB agar perubahan .env selalu
 # menimpa env var yang mungkin sudah ada di shell/sistem dari sesi sebelumnya.
@@ -50,6 +50,9 @@ def create_application() -> Application:
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
     )
 
+    # Registrasi callback query handler untuk tombol InlineKeyboard (misal: "Show FAQ Answer")
+    application.add_handler(CallbackQueryHandler(handle_callback_query))
+
     logger.info("✅ Telegram Application berhasil dikonfigurasi dengan semua handler.")
     return application
 
@@ -68,7 +71,7 @@ def run_polling() -> None:
     """
     application = create_application()
     logger.info("🤖 Bot ICICoS 2026 berjalan dalam mode POLLING. Tekan Ctrl+C untuk berhenti.")
-    application.run_polling(allowed_updates=["message"])
+    application.run_polling(allowed_updates=["message", "callback_query"])
 
 
 if __name__ == "__main__":

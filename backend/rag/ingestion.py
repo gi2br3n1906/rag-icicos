@@ -124,19 +124,23 @@ def save_extracted_text(source_pdf_name: str, text: str) -> Path:
 # ===========================================================================
 # 1. Helper: Embedding Model
 # ===========================================================================
+import threading
 
 _embeddings_instance = None
+_embeddings_lock = threading.Lock()
 
 def get_embeddings() -> HuggingFaceEmbeddings:
     """Menginisialisasi model embedding HuggingFace secara lokal (CPU)."""
     global _embeddings_instance
     if _embeddings_instance is None:
-        logger.info(f"Memuat embedding model lokal: {EMBEDDING_MODEL_NAME} (LOAD ONCE)")
-        _embeddings_instance = HuggingFaceEmbeddings(
-            model_name=EMBEDDING_MODEL_NAME,
-            model_kwargs={"device": "cpu"},
-            encode_kwargs={"normalize_embeddings": True},
-        )
+        with _embeddings_lock:
+            if _embeddings_instance is None:
+                logger.info(f"Memuat embedding model lokal: {EMBEDDING_MODEL_NAME} (LOAD ONCE)")
+                _embeddings_instance = HuggingFaceEmbeddings(
+                    model_name=EMBEDDING_MODEL_NAME,
+                    model_kwargs={"device": "cpu"},
+                    encode_kwargs={"normalize_embeddings": True},
+                )
     return _embeddings_instance
 
 def get_parent_document_retriever() -> ParentDocumentRetriever:

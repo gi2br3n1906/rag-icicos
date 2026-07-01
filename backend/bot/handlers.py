@@ -22,6 +22,7 @@ from telegram.constants import ChatAction, ParseMode
 from telegram.ext import ContextTypes
 
 from backend.rag.workflow import run_agentic_workflow
+from backend.rag.generator import FALLBACK_RESPONSE
 
 logger = logging.getLogger(__name__)
 

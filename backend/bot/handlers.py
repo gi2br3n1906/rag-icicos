@@ -132,23 +132,24 @@ def _build_inline_keyboard(
         rows.append([InlineKeyboardButton("📖 Show FAQ Answer", callback_data="show_faq")])
 
     # --- Baris 2+: SOP lain yang relevan ---
-    for sop in other_sops:
+    for idx, sop in enumerate(other_sops):
         filename = sop.get("filename", "")
-        # Tampilkan nama file tanpa ekstensi untuk label yang bersih
         label = filename.replace(".pdf", "").replace("_", " ")
+        # Gunakan indeks pendek (sop:0, sop:1) agar aman dari batas 64-byte Telegram.
+        # Filename asli disimpan di context.user_data["other_sops"].
         rows.append([
             InlineKeyboardButton(
                 f"🔍 Explore: {label}",
-                callback_data=f"show_sop:{filename}"
+                callback_data=f"sop:{idx}"
             )
         ])
 
     # --- Baris pertanyaan lanjutan ---
     for idx, question in enumerate(recommended_questions[:3]):
-        # Potong pertanyaan jika terlalu panjang untuk label tombol
-        label = question if len(question) <= 45 else question[:42] + "…"
+        # Label tombol bisa hingga 200 karakter (batas Telegram).
+        # Batas 64-byte hanya berlaku untuk callback_data (sudah aman: "rec:0" dll).
         rows.append([
-            InlineKeyboardButton(f"❓ {label}", callback_data=f"rec:{idx}")
+            InlineKeyboardButton(f"❓ {question}", callback_data=f"rec:{idx}")
         ])
 
     if not rows:
@@ -289,9 +290,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Simpan konteks rekomendasi di sesi user agar bisa diakses callback handler
     if not is_fallback:
         context.user_data["rec_queries"] = recommended_questions
+        context.user_data["other_sops"] = other_sops  # simpan list agar sop:<idx> callback bisa akses filename
         context.user_data["last_query"] = user_query
     else:
         context.user_data["rec_queries"] = []
+        context.user_data["other_sops"] = []
         context.user_data["last_query"] = None
 
     # Format jawaban (bold/italic LLM → HTML Telegram)
@@ -378,11 +381,30 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await _handle_show_faq(update, context, user)
 
     # ───────────────────────────────────────────
-    # 2. Callback: show_sop:<filename>
+    # 2. Callback: sop:<idx> (show SOP by index)
     # ───────────────────────────────────────────
-    elif data.startswith("show_sop:"):
-        filename = data[len("show_sop:"):]
-        logger.info(f"[Callback] User {user.id} mengklik 'Show SOP: {filename}'.")
+    elif data.startswith("sop:") or data.startswith("show_sop:"):
+        # Support both old show_sop:<filename> and new sop:<idx> format
+        if data.startswith("sop:"):
+            try:
+                sop_idx = int(data[len("sop:"):])
+            except ValueError:
+                logger.warning(f"[Callback] SOP index tidak valid: '{data}'")
+                return
+            stored_sops: list = context.user_data.get("other_sops", [])
+            if sop_idx >= len(stored_sops):
+                logger.warning(f"[Callback] SOP index {sop_idx} di luar batas (total: {len(stored_sops)}).")
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text="⚠️ This document suggestion is no longer available. Please ask your question again.",
+                )
+                return
+            filename = stored_sops[sop_idx].get("filename", "")
+        else:
+            # Legacy fallback: callback data langsung berisi filename
+            filename = data[len("show_sop:"):]
+
+        logger.info(f"[Callback] User {user.id} mengklik 'Explore SOP: {filename}'.")
         await _handle_show_sop(update, context, user, filename)
 
     # ───────────────────────────────────────────
@@ -582,9 +604,11 @@ async def _handle_recommended_question(update, context, user, idx: int):
         # Update state rekomendasi untuk kemungkinan klik tombol berikutnya
         if not is_fallback:
             context.user_data["rec_queries"] = new_rec_qs
+            context.user_data["other_sops"] = other_sops
             context.user_data["last_query"] = selected_question
         else:
             context.user_data["rec_queries"] = []
+            context.user_data["other_sops"] = []
             context.user_data["last_query"] = None
 
         formatted_answer = format_llm_output(answer)

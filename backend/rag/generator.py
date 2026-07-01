@@ -2,11 +2,12 @@
 generator.py - Modul Generator: mengirim query + konteks ke LLM dan mendapatkan jawaban.
 
 Arsitektur Baru (Bulletproof Agentic RAG):
-  - SOP_SYSTEM_PROMPT : Instruksi khusus untuk menjawab SOP — wajib lengkap & urut.
-  - FAQ_SYSTEM_PROMPT : Instruksi khusus untuk menjawab FAQ — singkat & padat.
-  - generate_sop_answer() : Generator untuk jalur SOP.
-  - generate_faq_answer() : Generator untuk jalur FAQ.
-  - generate_answer()     : Entry point lama (backward compat / direct call).
+  - SOP_SYSTEM_PROMPT      : Instruksi khusus untuk menjawab SOP — wajib lengkap & urut.
+  - FAQ_SYSTEM_PROMPT      : Instruksi khusus untuk menjawab FAQ — singkat & padat.
+  - generate_sop_answer()  : Generator untuk jalur SOP.
+  - generate_faq_answer()  : Generator untuk jalur FAQ.
+  - check_sop_answers_query(): Binary YES/NO classifier — cek apakah SOP punya info untuk query.
+  - generate_answer()      : Entry point lama (backward compat / direct call).
 
 Mendukung tiga provider: OpenRouter, Google Gemini, dan Ollama Lokal.
 """
@@ -190,7 +191,53 @@ def _parse_answer_and_followups(raw_output: str) -> Tuple[str, List[str]]:
 
 
 # ---------------------------------------------------------------------------
-# Public API: Specialized generators untuk workflow baru
+# Public API: Binary Relevance Classifier
+# ---------------------------------------------------------------------------
+
+# Prompt khusus untuk validasi other_sops — TIDAK menghasilkan jawaban,
+# hanya mengklasifikasikan apakah dokumen punya info untuk menjawab query.
+_SOP_RELEVANCE_CHECK_PROMPT = """You are a relevance classifier. Your ONLY job is to determine whether the document below contains specific, substantial information that directly answers the user's question.
+
+Rules:
+- Answer YES only if the document has clear, actionable content about the user's question.
+- Answer NO if the document does not cover the topic, mentions it only tangentially, or only says it doesn't have that information.
+- Answer with exactly one word: YES or NO. Nothing else.
+
+User's question: "{question}"
+
+Document:
+{context}
+
+Does this document contain specific information to answer the question above?"""
+
+
+def check_sop_answers_query(query: str, sop_doc: Document) -> bool:
+    """
+    Binary classifier: apakah dokumen SOP ini benar-benar bisa menjawab query?
+
+    Menggunakan prompt khusus yang TIDAK meminta LLM menghasilkan jawaban,
+    melainkan hanya mengklasifikasikan YES/NO.
+
+    Digunakan oleh workflow._validate_other_sop() sebagai satu-satunya gate
+    validasi — menggantikan pendekatan generate_sop_answer + verify_answer
+    yang tidak tepat karena verifier dirancang menerima jawaban 'not found' jujur.
+
+    Returns:
+        True  → dokumen punya info relevan, tombol Explore layak ditampilkan.
+        False → dokumen tidak menjawab query, sembunyikan dari user.
+    """
+    context = _format_sop_context(sop_doc)
+    prompt = _SOP_RELEVANCE_CHECK_PROMPT.format(
+        question=query,
+        context=context,
+    )
+    logger.info(f"[Generator-Check] Binary relevance check untuk query: '{query[:60]}'")
+    raw = _dispatch(prompt).strip().upper()
+    result = raw.startswith("YES")
+    logger.info(f"[Generator-Check] Hasil: '{raw[:10]}' → {'RELEVANT' if result else 'NOT RELEVANT'}")
+    return result
+
+
 # ---------------------------------------------------------------------------
 
 def generate_sop_answer(query: str, sop_doc: Document) -> Tuple[str, List[str]]:

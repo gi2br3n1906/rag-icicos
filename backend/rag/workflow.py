@@ -45,6 +45,7 @@ from langgraph.graph import END, StateGraph
 
 from backend.rag.generator import (
     FALLBACK_RESPONSE,
+    check_sop_answers_query,
     generate_faq_answer,
     generate_sop_answer,
 )
@@ -192,14 +193,11 @@ async def _validate_other_sop(query: str, sop_info: Dict) -> Optional[Dict]:
     """
     Validasi apakah sebuah SOP kandidat benar-benar dapat menjawab query user.
 
-    DUA gate validasi:
-    1. Hard check: jika generate_sop_answer mengembalikan FALLBACK_RESPONSE exact → buang.
-    2. Verifier check: jalankan verify_answer pada jawaban yang dihasilkan.
-       Ini menangkap kasus di mana LLM membuat response "not available in this document"
-       sendiri (bukan string FALLBACK_RESPONSE exact) — verifier mengenali bahwa jawaban
-       tersebut tidak berakar dari konten dokumen dan mengembalikan False.
+    Menggunakan check_sop_answers_query() — binary YES/NO classifier yang
+    mengirim prompt khusus ke LLM. Tidak menghasilkan jawaban (tidak seperti
+    generate_sop_answer), sehingga tidak ada kasus LLM generate 'not available'
+    yang terlewat oleh verifier.
 
-    Hanya SOP yang lolos KEDUA gate yang ditampilkan sebagai tombol Explore.
     Dijalankan secara paralel untuk semua kandidat via asyncio.gather.
     """
     filename = sop_info.get("filename", "")
@@ -209,31 +207,18 @@ async def _validate_other_sop(query: str, sop_info: Dict) -> Optional[Dict]:
             logger.warning(f"[Workflow] Validasi other_sop: '{filename}' tidak ditemukan di docstore.")
             return None
 
-        answer, _ = await asyncio.to_thread(generate_sop_answer, query, sop_doc)
+        is_relevant = await asyncio.to_thread(check_sop_answers_query, query, sop_doc)
 
-        # Gate 1: exact FALLBACK_RESPONSE check
-        if answer == FALLBACK_RESPONSE:
-            logger.info(f"[Workflow] Validasi other_sop: '{filename}' → GAGAL gate-1 (FALLBACK exact).")
+        if not is_relevant:
+            logger.info(f"[Workflow] Validasi other_sop: '{filename}' → GAGAL (binary check: NO).")
             return None
 
-        # Gate 2: verifier — cek apakah jawaban benar-benar berakar dari dokumen ini.
-        # Menangkap kasus LLM menghasilkan "not available in this document" buatan sendiri.
-        is_grounded = await asyncio.to_thread(
-            verify_answer, query, sop_doc.page_content, answer
-        )
-        if not is_grounded:
-            logger.info(
-                f"[Workflow] Validasi other_sop: '{filename}' → GAGAL gate-2 (verifier: jawaban tidak berakar dari SOP ini)."
-            )
-            return None
-
-        logger.info(f"[Workflow] Validasi other_sop: '{filename}' → LULUS kedua gate.")
+        logger.info(f"[Workflow] Validasi other_sop: '{filename}' → LULUS (binary check: YES).")
         return sop_info
 
     except Exception as exc:
         logger.error(f"[Workflow] Error saat validasi other_sop '{filename}': {exc}", exc_info=True)
         return None
-
 
 
 async def node_generate_sop(state: AgentState) -> AgentState:

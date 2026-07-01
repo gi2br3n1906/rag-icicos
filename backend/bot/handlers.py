@@ -17,7 +17,14 @@ import asyncio
 import logging
 import re
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+    Update,
+)
 from telegram.constants import ChatAction, ParseMode
 from telegram.ext import ContextTypes
 
@@ -112,18 +119,14 @@ async def _log_chat_to_db(
 def _build_inline_keyboard(
     has_both: bool,
     other_sops: list,
-    recommended_questions: list,
 ) -> InlineKeyboardMarkup | None:
     """
-    Membangun InlineKeyboardMarkup secara dinamis berdasarkan konten yang tersedia.
-
-    Layout:
-      - Baris 1: Tombol "Show FAQ Answer" (jika has_both=True)
-      - Baris 2+: Satu tombol per SOP relevan lainnya
-      - Baris terakhir: Tombol pertanyaan lanjutan (satu per baris, max 3)
+    Membangun InlineKeyboardMarkup untuk tombol FAQ shortcut dan SOP lain.
+    Follow-up questions TIDAK lagi ada di sini — mereka ditampilkan via ReplyKeyboardMarkup
+    agar teksnya tidak terpotong oleh Telegram.
 
     Returns:
-        InlineKeyboardMarkup atau None jika tidak ada tombol yang perlu ditampilkan.
+        InlineKeyboardMarkup atau None jika tidak ada tombol.
     """
     rows = []
 
@@ -135,8 +138,6 @@ def _build_inline_keyboard(
     for idx, sop in enumerate(other_sops):
         filename = sop.get("filename", "")
         label = filename.replace(".pdf", "").replace("_", " ")
-        # Gunakan indeks pendek (sop:0, sop:1) agar aman dari batas 64-byte Telegram.
-        # Filename asli disimpan di context.user_data["other_sops"].
         rows.append([
             InlineKeyboardButton(
                 f"🔍 Explore: {label}",
@@ -144,18 +145,34 @@ def _build_inline_keyboard(
             )
         ])
 
-    # --- Baris pertanyaan lanjutan ---
-    for idx, question in enumerate(recommended_questions[:3]):
-        # Label tombol bisa hingga 200 karakter (batas Telegram).
-        # Batas 64-byte hanya berlaku untuk callback_data (sudah aman: "rec:0" dll).
-        rows.append([
-            InlineKeyboardButton(f"❓ {question}", callback_data=f"rec:{idx}")
-        ])
-
     if not rows:
         return None
 
     return InlineKeyboardMarkup(rows)
+
+
+def _build_followup_reply_keyboard(recommended_questions: list) -> ReplyKeyboardMarkup | None:
+    """
+    Membangun ReplyKeyboardMarkup untuk pertanyaan lanjutan.
+
+    Tombol ini muncul di atas keyboard user (bukan di bubble chat),
+    sehingga teks penuh dapat ditampilkan tanpa dipotong.
+    Menekan tombol akan mengirimkan teks pertanyaan sebagai pesan biasa,
+    yang langsung diproses oleh handle_message — tidak perlu callback handler.
+
+    Returns:
+        ReplyKeyboardMarkup atau None jika tidak ada pertanyaan.
+    """
+    if not recommended_questions:
+        return None
+
+    buttons = [[KeyboardButton(q)] for q in recommended_questions[:3]]
+    return ReplyKeyboardMarkup(
+        buttons,
+        one_time_keyboard=True,    # Keyboard hilang otomatis setelah diklik
+        resize_keyboard=True,      # Menyesuaikan ukuran dengan layar
+        input_field_placeholder="Tap a question or type your own...",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -319,11 +336,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if extra_info_parts:
         formatted_answer += "\n\n" + "\n".join(extra_info_parts)
 
-    # Bangun keyboard tombol inline
-    reply_markup = _build_inline_keyboard(
+    # Inline keyboard hanya untuk FAQ + SOP explore (bukan follow-up questions)
+    inline_markup = _build_inline_keyboard(
         has_both if not is_fallback else False,
         other_sops if not is_fallback else [],
-        recommended_questions if not is_fallback else []
     )
 
     from telegram.error import BadRequest
@@ -332,11 +348,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(
             formatted_answer,
             parse_mode=ParseMode.HTML,
-            reply_markup=reply_markup,
+            reply_markup=inline_markup,
         )
     except BadRequest as e:
         logger.warning(f"[Bot] Gagal parse HTML ({e}), fallback ke plain text.")
-        await update.message.reply_text(answer, reply_markup=reply_markup)
+        await update.message.reply_text(answer, reply_markup=inline_markup)
+
+    # Kirim follow-up questions sebagai ReplyKeyboard (near keyboard, full text)
+    if recommended_questions and not is_fallback:
+        followup_kb = _build_followup_reply_keyboard(recommended_questions)
+        await update.message.reply_text(
+            "💡 <i>Suggested follow-up questions — tap to ask:</i>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=followup_kb,
+        )
+    else:
+        # Hapus ReplyKeyboard lama jika tidak ada follow-up questions
+        await update.message.reply_text(
+            "✅",
+            reply_markup=ReplyKeyboardRemove(),
+        ) if False else None  # Non-invasive: jangan kirim pesan ekstra
 
     # Simpan log ke database (fire-and-forget)
     await _log_chat_to_db(
@@ -631,10 +662,9 @@ async def _handle_recommended_question(update, context, user, idx: int):
         if extra_info_parts:
             formatted_answer += "\n\n" + "\n".join(extra_info_parts)
 
-        reply_markup = _build_inline_keyboard(
+        inline_markup = _build_inline_keyboard(
             has_both if not is_fallback else False,
             other_sops if not is_fallback else [],
-            new_rec_qs if not is_fallback else []
         )
 
         from telegram.error import BadRequest
@@ -643,14 +673,24 @@ async def _handle_recommended_question(update, context, user, idx: int):
                 chat_id=update.effective_chat.id,
                 text=formatted_answer,
                 parse_mode=ParseMode.HTML,
-                reply_markup=reply_markup,
+                reply_markup=inline_markup,
             )
         except BadRequest as e:
             logger.warning(f"[Callback-Rec] Gagal parse HTML ({e}), fallback ke plain text.")
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
                 text=answer,
-                reply_markup=reply_markup,
+                reply_markup=inline_markup,
+            )
+
+        # Kirim follow-up questions sebagai ReplyKeyboard
+        if new_rec_qs and not is_fallback:
+            followup_kb = _build_followup_reply_keyboard(new_rec_qs)
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="💡 <i>Suggested follow-up questions — tap to ask:</i>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=followup_kb,
             )
 
         # Log ke database

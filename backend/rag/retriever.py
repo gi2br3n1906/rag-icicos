@@ -2,14 +2,15 @@
 retriever.py - Modul Retrieval: pencarian dokumen terisolasi per tipe (SOP & FAQ).
 
 Arsitektur Baru (Bulletproof Agentic RAG):
-  - retrieve_sop()  : Gunakan ParentDocumentRetriever → Top-K=1 → kembalikan 1 SOP UTUH
-                      Menjamin SOP tidak pernah bolong atau tercampur dengan SOP lain.
+  - retrieve_sop()  : Gunakan ParentDocumentRetriever → kembalikan PRIMARY doc + OTHER relevant SOPs
+                      Primary doc = rank-1 terbaik, other_sops = daftar dokumen relevan lainnya.
   - retrieve_faq()  : Pencarian vektor standar di koleksi FAQ (histori WhatsApp)
                       Top-K=4, mengembalikan beberapa chunk FAQ yang relevan.
+  - get_parent_document_by_filename() : Ambil dokumen dari local store via nama file (instant, no vector search).
 """
 import logging
 import os
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
@@ -45,17 +46,45 @@ def _get_faq_vectorstore() -> Chroma:
     )
 
 
-def retrieve_sop(query: str) -> Tuple[Optional[Document], float]:
+def get_parent_document_by_filename(filename: str) -> Optional[Document]:
     """
-    Mengambil SATU dokumen SOP utuh menggunakan ParentDocumentRetriever.
+    Mengambil dokumen SOP utuh secara INSTAN menggunakan nama file sebagai key.
 
-    Alur:
-      1. Cari child chunk yang relevan di ChromaDB (collection: icicos_sop).
-      2. Dari chunk terbaik, ambil kembali parent document utuh dari LocalFileStore.
-      3. Return (parent_doc, best_score). Jika tidak ditemukan → (None, 0.0).
+    Digunakan ketika user mengklik tombol rekomendasi SOP lain sehingga tidak
+    perlu menjalankan pencarian vektor ulang (zero latency retrieval).
 
-    Jaminan: Selalu mengembalikan maksimal 1 dokumen SOP yang UTUH.
-    Tidak ada kemungkinan 2 SOP berbeda tercampur dalam satu query.
+    Args:
+        filename: Nama file SOP (e.g. 'SOP-Virtual-Account.pdf').
+
+    Returns:
+        Document jika ditemukan, None jika tidak ada.
+    """
+    try:
+        raw_store = LocalFileStore(PARENT_STORE_DIR)
+        docstore = create_kv_docstore(raw_store)
+        doc = docstore.mget([filename])
+        if doc and doc[0] is not None:
+            logger.info(f"[Retriever-Filename] ✅ Dokumen '{filename}' ditemukan di docstore.")
+            return doc[0]
+        logger.warning(f"[Retriever-Filename] Dokumen '{filename}' tidak ada di docstore.")
+        return None
+    except Exception as e:
+        logger.error(f"[Retriever-Filename] Error saat mengambil dokumen '{filename}': {e}", exc_info=True)
+        return None
+
+
+def retrieve_sop(query: str) -> Tuple[Optional[Document], float, List[Dict]]:
+    """
+    Mengambil dokumen SOP menggunakan ParentDocumentRetriever.
+
+    Mengembalikan:
+      - primary_doc   : Parent document terbaik (rank-1) berdasarkan score tertinggi.
+      - primary_score : Similarity score tertinggi dari child chunk manapun.
+      - other_sops    : List dict dokumen SOP relevan lainnya (skor >= threshold),
+                        format: [{"filename": "SOP-VA.pdf", "score": 0.74}, ...].
+
+    Jaminan: primary_doc selalu merupakan satu dokumen SOP yang UTUH.
+    other_sops tidak mengandung dokumen yang sama dengan primary_doc.
     """
     logger.info(f"[Retriever-SOP] Mencari SOP untuk query: '{query[:60]}'")
 
@@ -63,7 +92,7 @@ def retrieve_sop(query: str) -> Tuple[Optional[Document], float]:
         vectorstore = _get_sop_vectorstore()
         raw_store = LocalFileStore(PARENT_STORE_DIR)
         docstore = create_kv_docstore(raw_store)
-        
+
         child_splitter = RecursiveCharacterTextSplitter(
             chunk_size=CHUNK_SIZE,
             chunk_overlap=CHUNK_OVERLAP,
@@ -74,52 +103,81 @@ def retrieve_sop(query: str) -> Tuple[Optional[Document], float]:
             child_splitter=child_splitter,
         )
 
-        # Cari skor child chunk dahulu untuk validasi threshold
+        # Ambil top-K child chunks dengan skor (k=10 agar bisa deteksi beberapa SOP)
         results_with_scores = vectorstore.similarity_search_with_relevance_scores(
-            query, k=1
+            query, k=10
         )
 
         if not results_with_scores:
             logger.warning("[Retriever-SOP] Tidak ada child chunk yang cocok.")
-            return None, 0.0
+            return None, 0.0, []
 
-        best_score = results_with_scores[0][1]
-        logger.info(f"[Retriever-SOP] Skor child chunk terbaik: {best_score:.4f}")
+        # --- Kelompokkan skor tertinggi per source (nama file) ---
+        # Setiap child chunk memiliki metadata["source"] = nama file PDF asalnya.
+        best_score_per_source: Dict[str, float] = {}
+        for chunk_doc, score in results_with_scores:
+            source = chunk_doc.metadata.get("source", "unknown")
+            if source not in best_score_per_source or score > best_score_per_source[source]:
+                best_score_per_source[source] = score
 
-        if best_score < SIMILARITY_THRESHOLD:
+        # Filter hanya yang memenuhi threshold
+        relevant_sources = {
+            src: sc for src, sc in best_score_per_source.items()
+            if sc >= SIMILARITY_THRESHOLD
+        }
+
+        if not relevant_sources:
+            best_global_score = max(best_score_per_source.values())
             logger.warning(
-                f"[Retriever-SOP] Skor {best_score:.4f} di bawah threshold {SIMILARITY_THRESHOLD}. Tidak ada SOP relevan."
+                f"[Retriever-SOP] Tidak ada source yang melebihi threshold {SIMILARITY_THRESHOLD}. "
+                f"Skor tertinggi: {best_global_score:.4f}"
             )
-            return None, best_score
+            return None, best_global_score, []
 
-        # Gunakan ParentDocumentRetriever untuk mendapatkan dokumen utuh
-        parent_docs = parent_retriever.invoke(query)
+        # Urutkan berdasarkan skor tertinggi → primary doc = rank-1
+        sorted_sources = sorted(relevant_sources.items(), key=lambda x: x[1], reverse=True)
+        primary_filename, primary_score = sorted_sources[0]
 
-        if not parent_docs:
-            logger.warning("[Retriever-SOP] Parent document tidak ditemukan di store.")
-            return None, best_score
-
-        # Ambil hanya 1 parent document teratas
-        parent_doc = parent_docs[0]
         logger.info(
-            f"[Retriever-SOP] ✅ Parent SOP ditemukan: '{parent_doc.metadata.get('source', '?')}' "
-            f"({len(parent_doc.page_content):,} karakter)"
+            f"[Retriever-SOP] Primary: '{primary_filename}' (score={primary_score:.4f}). "
+            f"Total relevant sources: {len(sorted_sources)}"
         )
-        return parent_doc, best_score
+
+        # Ambil parent document untuk primary filename
+        primary_doc_list = docstore.mget([primary_filename])
+        if not primary_doc_list or primary_doc_list[0] is None:
+            logger.warning(f"[Retriever-SOP] Parent doc untuk '{primary_filename}' tidak ada di store. Fallback ke retriever.")
+            parent_docs = parent_retriever.invoke(query)
+            primary_doc = parent_docs[0] if parent_docs else None
+        else:
+            primary_doc = primary_doc_list[0]
+
+        if primary_doc is None:
+            logger.warning("[Retriever-SOP] Primary parent document tidak dapat ditemukan.")
+            return None, primary_score, []
+
+        logger.info(
+            f"[Retriever-SOP] ✅ Primary SOP: '{primary_filename}' "
+            f"({len(primary_doc.page_content):,} karakter)"
+        )
+
+        # Build other_sops list (semua relevan selain primary)
+        other_sops = [
+            {"filename": src, "score": sc}
+            for src, sc in sorted_sources[1:]  # Skip rank-1
+        ]
+
+        if other_sops:
+            logger.info(
+                f"[Retriever-SOP] Other SOPs ditemukan: "
+                f"{[o['filename'] for o in other_sops]}"
+            )
+
+        return primary_doc, primary_score, other_sops
 
     except Exception as e:
-        if "ValidationError" in type(e).__name__ or "validation error" in str(e).lower():
-            logger.error(
-                "[Retriever-SOP] 🚨 CRITICAL: Database corruption detected in ChromaDB! "
-                "Some documents in the 'icicos_sop' collection have null page content. "
-                "To fix this, please run 'python poc_rag.py --reset' and re-ingest your documents, "
-                "or trigger the POST /api/knowledge/reset endpoint. "
-                f"Original error: {e}",
-                exc_info=True
-            )
-        else:
-            logger.error(f"[Retriever-SOP] Error saat retrieval: {e}", exc_info=True)
-        return None, 0.0
+        logger.error(f"[Retriever-SOP] Error saat retrieval: {e}", exc_info=True)
+        return None, 0.0, []
 
 
 def retrieve_faq(query: str) -> Tuple[List[Document], float]:
@@ -150,15 +208,5 @@ def retrieve_faq(query: str) -> Tuple[List[Document], float]:
         return docs, best_score
 
     except Exception as e:
-        if "ValidationError" in type(e).__name__ or "validation error" in str(e).lower():
-            logger.error(
-                "[Retriever-FAQ] 🚨 CRITICAL: Database corruption detected in ChromaDB! "
-                "Some documents in the 'icicos_faq' collection have null page content. "
-                "To fix this, please run 'python poc_rag.py --reset' and re-ingest your documents, "
-                "or trigger the POST /api/knowledge/reset endpoint. "
-                f"Original error: {e}",
-                exc_info=True
-            )
-        else:
-            logger.error(f"[Retriever-FAQ] Error saat retrieval: {e}", exc_info=True)
+        logger.error(f"[Retriever-FAQ] Error saat retrieval: {e}", exc_info=True)
         return [], 0.0

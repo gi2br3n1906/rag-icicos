@@ -5,19 +5,15 @@ Setiap fungsi di sini di-register ke Application di bot_runner.py.
 Alur handle_message:
   Pesan masuk
     → kirim "typing..."
-    → RAG Workflow (Parallel Retrieval) → Tuple[answer, score, has_both]
+    → RAG chain (retrieve + generate) → Tuple[answer, score, has_both, other_sops, rec_questions]
     → format HTML (bold/italic)
-    → kirim jawaban ke user
-    → jika has_both=True: lampirkan InlineKeyboard tombol "Show FAQ Answer"
+    → kirim jawaban ke user dengan tombol inline:
+        * "Show FAQ Answer" (jika has_both=True)
+        * Tombol SOP lain (jika other_sops tidak kosong)
+        * Tombol pertanyaan lanjutan (jika recommended_questions tidak kosong)
     → logging ke PostgreSQL (fire-and-forget, tidak crash bot jika gagal)
-
-Alur handle_callback_query (ketika user klik tombol "Show FAQ Answer"):
-  Callback masuk
-    → ambil query terakhir user dari PostgreSQL chat_logs
-    → jalankan FAQ retrieval + generation
-    → kirim jawaban FAQ sebagai pesan balasan baru
-    → hapus tombol dari pesan asli (edit_message_reply_markup)
 """
+import asyncio
 import logging
 import re
 
@@ -44,11 +40,6 @@ def format_llm_output(text: str) -> str:
          dikira dua token italic)
       2. *italic* → <i>italic</i>
 
-    Latar belakang: LLM (Gemini, OpenRouter, Ollama) mengembalikan teks
-    dengan penanda Markdown standar. Telegram tidak merender Markdown
-    secara otomatis — simbol muncul mentah di chat. Solusi: gunakan
-    parse_mode=ParseMode.HTML dan konversi via regex sebelum dikirim.
-
     Args:
         text: String output mentah dari LLM.
 
@@ -56,11 +47,9 @@ def format_llm_output(text: str) -> str:
         String dengan tag HTML siap dikirim ke Telegram.
     """
     # Langkah 1: Konversi **bold** → <b>bold</b>
-    # (harus lebih dulu agar ** tidak dikira dua * italic)
     text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
 
     # Langkah 2: Konversi *italic* → <i>italic</i>
-    # Setelah bold selesai, semua * yang tersisa adalah penanda italic tunggal
     text = re.sub(r'\*(.*?)\*', r'<i>\1</i>', text)
 
     return text
@@ -82,9 +71,6 @@ async def _log_chat_to_db(
     Fungsi ini bersifat fire-and-forget — kegagalan logging TIDAK boleh
     menghentikan atau menginterupsi pengiriman jawaban ke user Telegram.
 
-    Lazy import digunakan agar modul database tidak di-load saat bot
-    pertama kali startup (menjaga waktu inisialisasi tetap cepat).
-
     Args:
         user_id         : Telegram user ID sebagai string.
         query           : Pertanyaan asli dari user.
@@ -92,7 +78,6 @@ async def _log_chat_to_db(
         similarity_score: Skor retrieval tertinggi (0.0 jika fallback).
     """
     try:
-        # Lazy import — modul database hanya diload saat fungsi ini pertama dipanggil
         from backend.api.database import AsyncSessionLocal
         from backend.api.models import ChatLog
 
@@ -113,11 +98,63 @@ async def _log_chat_to_db(
         )
 
     except Exception as db_exc:
-        # Log error tapi JANGAN re-raise — bot harus tetap berjalan
         logger.error(
             f"[DB Log] ❌ Gagal menyimpan chat log untuk user {user_id}: {db_exc}",
             exc_info=True,
         )
+
+
+# ---------------------------------------------------------------------------
+# Helper: Build inline keyboard dengan tombol SOP, FAQ, dan follow-up questions
+# ---------------------------------------------------------------------------
+
+def _build_inline_keyboard(
+    has_both: bool,
+    other_sops: list,
+    recommended_questions: list,
+) -> InlineKeyboardMarkup | None:
+    """
+    Membangun InlineKeyboardMarkup secara dinamis berdasarkan konten yang tersedia.
+
+    Layout:
+      - Baris 1: Tombol "Show FAQ Answer" (jika has_both=True)
+      - Baris 2+: Satu tombol per SOP relevan lainnya
+      - Baris terakhir: Tombol pertanyaan lanjutan (satu per baris, max 3)
+
+    Returns:
+        InlineKeyboardMarkup atau None jika tidak ada tombol yang perlu ditampilkan.
+    """
+    rows = []
+
+    # --- Baris 1: FAQ shortcut ---
+    if has_both:
+        rows.append([InlineKeyboardButton("📖 Show FAQ Answer", callback_data="show_faq")])
+
+    # --- Baris 2+: SOP lain yang relevan ---
+    for sop in other_sops:
+        filename = sop.get("filename", "")
+        # Tampilkan nama file tanpa ekstensi untuk label yang bersih
+        label = filename.replace(".pdf", "").replace("_", " ")
+        score = sop.get("score", 0.0)
+        rows.append([
+            InlineKeyboardButton(
+                f"📄 More: {label} ({score:.2f})",
+                callback_data=f"show_sop:{filename}"
+            )
+        ])
+
+    # --- Baris pertanyaan lanjutan ---
+    for idx, question in enumerate(recommended_questions[:3]):
+        # Potong pertanyaan jika terlalu panjang untuk label tombol
+        label = question if len(question) <= 45 else question[:42] + "…"
+        rows.append([
+            InlineKeyboardButton(f"❓ {label}", callback_data=f"rec:{idx}")
+        ])
+
+    if not rows:
+        return None
+
+    return InlineKeyboardMarkup(rows)
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +171,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "I am here to help you with questions about:\n"
         "• Paper Submission Guidelines\n"
         "• Registration Payment Procedures\n"
-        "• Conference Schedule &amp; Timeline\n"
+        "• Conference Schedule & Timeline\n"
         "• And other official conference information\n\n"
         "Feel free to type your question directly — in English or Bahasa Indonesia!"
     )
@@ -159,17 +196,17 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handler for the /reset command. Clears the user's chat history from the database."""
     user = update.effective_user
-    
+
     try:
         from backend.api.database import AsyncSessionLocal
         from backend.api.models import ChatLog
         from sqlalchemy import delete
-        
+
         async with AsyncSessionLocal() as session:
             stmt = delete(ChatLog).where(ChatLog.user_id == str(user.id))
             await session.execute(stmt)
             await session.commit()
-            
+
         logger.info(f"[Bot] Histori chat di-reset untuk user {user.id}")
         await update.message.reply_text(
             "✅ <b>Your chat history has been cleared!</b>\n"
@@ -191,14 +228,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     Alur:
       1. Catat query ke log.
-      2. Kirim sinyal ChatAction.TYPING agar muncul "sedang mengetik..."
-         di sisi Telegram user selama proses RAG berlangsung.
-      3. Jalankan RAG Workflow (Parallel Retrieval) → mendapatkan Tuple[jawaban, score, has_both].
-      4. Format jawaban dari Markdown LLM ke HTML Telegram.
-      5. Jika has_both=True, lampirkan teks ajakan dan InlineKeyboard tombol "Show FAQ Answer".
-      6. Kirim jawaban ke user.
-      7. Simpan log percakapan ke PostgreSQL (fire-and-forget).
-         Kegagalan logging tidak mengganggu pengiriman jawaban.
+      2. Kirim sinyal ChatAction.TYPING.
+      3. Jalankan RAG chain → mendapatkan Tuple[jawaban, score, has_both, other_sops, rec_qs].
+      4. Simpan recommended_questions di context.user_data untuk diambil callback handler.
+      5. Format jawaban dari Markdown LLM ke HTML Telegram.
+      6. Bangun InlineKeyboardMarkup secara dinamis.
+      7. Kirim jawaban ke user.
+      8. Simpan log percakapan ke PostgreSQL (fire-and-forget).
     """
     user = update.effective_user
     user_query = update.message.text
@@ -207,36 +243,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         f"[Bot] Pesan masuk dari user {user.id} (@{user.username}): '{user_query}'"
     )
 
-    # Kirim sinyal "typing..." ke Telegram — muncul selama RAG engine bekerja
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id,
         action=ChatAction.TYPING,
     )
 
-    # Nilai default jika RAG gagal total
     answer: str = ""
     similarity_score: float = 0.0
     has_both: bool = False
+    other_sops: list = []
+    recommended_questions: list = []
 
     try:
-        # Import db session factory untuk diinjeksikan ke workflow
         from backend.api.database import AsyncSessionLocal
 
         async with AsyncSessionLocal() as db_session:
-            # Jalankan Agentic Workflow dengan Parallel Retrieval + Late Routing
-            answer, similarity_score, has_both = await run_agentic_workflow(
-                query=user_query,
-                user_id=str(user.id),
-                db_session=db_session,
+            answer, similarity_score, has_both, other_sops, recommended_questions = (
+                await run_agentic_workflow(
+                    query=user_query,
+                    user_id=str(user.id),
+                    db_session=db_session,
+                )
             )
 
         logger.info(
             f"[Bot] Jawaban di-generate untuk user {user.id}. "
-            f"Score: {similarity_score:.4f}, has_both={has_both}, Panjang: {len(answer)} karakter."
+            f"Score: {similarity_score:.4f}, has_both={has_both}, "
+            f"other_sops={len(other_sops)}, rec_qs={len(recommended_questions)}, "
+            f"Panjang: {len(answer)} karakter."
         )
 
     except Exception as exc:
-        # Log error secara lengkap untuk debugging, kirim pesan ramah ke user
         logger.error(
             f"[Bot] Error saat memproses query dari user {user.id}: {exc}",
             exc_info=True,
@@ -247,23 +284,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "directly if the problem persists."
         )
 
+    # Simpan konteks rekomendasi di sesi user agar bisa diakses callback handler
+    context.user_data["rec_queries"] = recommended_questions
+    context.user_data["last_query"] = user_query
+
     # Format jawaban (bold/italic LLM → HTML Telegram)
     formatted_answer = format_llm_output(answer)
 
-    # Siapkan InlineKeyboard jika query ditemukan di kedua database (SOP & FAQ)
-    reply_markup = None
+    # Tambahkan penanda jika ada SOP/FAQ lain yang tersedia
+    extra_info_parts = []
     if has_both:
-        formatted_answer += (
-            "\n\n💡 <i>This topic also has a short community-sourced FAQ answer. "
-            "Would you like to see it?</i>"
+        extra_info_parts.append(
+            "💡 <i>A short community FAQ answer is also available for this topic.</i>"
         )
-        keyboard = [[InlineKeyboardButton("📖 Show FAQ Answer", callback_data="show_faq")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        logger.info(f"[Bot] has_both=True untuk user {user.id}. Melampirkan tombol FAQ.")
+    if other_sops:
+        names = ", ".join(
+            s["filename"].replace(".pdf", "").replace("_", " ")
+            for s in other_sops
+        )
+        extra_info_parts.append(
+            f"📑 <i>This topic also appears in: {names}. Tap a button below to explore.</i>"
+        )
+
+    if extra_info_parts:
+        formatted_answer += "\n\n" + "\n".join(extra_info_parts)
+
+    # Bangun keyboard tombol inline
+    reply_markup = _build_inline_keyboard(has_both, other_sops, recommended_questions)
 
     from telegram.error import BadRequest
 
-    # Kirim jawaban ke user dengan penanganan error tag HTML
     try:
         await update.message.reply_text(
             formatted_answer,
@@ -272,11 +322,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
     except BadRequest as e:
         logger.warning(f"[Bot] Gagal parse HTML ({e}), fallback ke plain text.")
-        # Jika tag HTML rusak (contoh: <b><i>...</b>), fallback kirim text mentah tanpa parse_mode
         await update.message.reply_text(answer, reply_markup=reply_markup)
 
-    # Simpan log ke database (fire-and-forget — tidak crash bot jika gagal)
-    # Gunakan teks yang sudah terformat sebagai kolom 'answer' di DB
+    # Simpan log ke database (fire-and-forget)
     await _log_chat_to_db(
         user_id=str(user.id),
         query=user_query,
@@ -286,62 +334,84 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 # ---------------------------------------------------------------------------
-# Callback Query Handler — Tombol "Show FAQ Answer"
+# Callback Query Handler — Tombol Inline Keyboard
 # ---------------------------------------------------------------------------
 
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Handler untuk aksi InlineKeyboard (callback_query) dari Telegram.
 
-    Dipanggil ketika user mengklik tombol "Show FAQ Answer" yang dilampirkan
-    pada pesan bot ketika has_both=True.
-
-    Alur:
-      1. Acknowledge callback ke Telegram (menghilangkan spinner loading pada tombol).
-      2. Ambil query terakhir user dari PostgreSQL tabel chat_logs.
-      3. Jalankan FAQ retrieval + generation secara langsung.
-      4. Kirim jawaban FAQ singkat sebagai pesan baru.
-      5. Hapus InlineKeyboard dari pesan asli untuk mencegah klik ganda.
+    Menangani tiga jenis callback data:
+      - "show_faq"          → Tampilkan jawaban singkat dari koleksi FAQ WhatsApp.
+      - "show_sop:<fname>"  → Ambil & tampilkan jawaban dari SOP alternatif secara instan.
+      - "rec:<idx>"         → Ambil pertanyaan lanjutan, tampilkan label, proses via RAG.
     """
     query = update.callback_query
     user = query.from_user
+    data = query.data or ""
 
     # Wajib dipanggil segera untuk menghilangkan spinner loading di tombol Telegram
     await query.answer()
-
-    if query.data != "show_faq":
-        logger.warning(f"[Callback] Callback data tidak dikenali: '{query.data}'")
-        return
-
-    logger.info(f"[Callback] User {user.id} mengklik 'Show FAQ Answer'.")
 
     # --- Hapus tombol dari pesan asli untuk mencegah klik ganda ---
     try:
         await query.edit_message_reply_markup(reply_markup=None)
     except Exception as edit_exc:
-        # Tidak fatal jika gagal — lanjutkan proses FAQ generation
         logger.warning(f"[Callback] Gagal menghapus reply_markup: {edit_exc}")
 
-    # --- Ambil query terakhir user dari PostgreSQL chat_logs ---
-    last_query: str | None = None
-    try:
-        from backend.api.database import AsyncSessionLocal
-        from backend.api.models import ChatLog
-        from sqlalchemy import select, desc
+    # ───────────────────────────────────────────
+    # 1. Callback: show_faq
+    # ───────────────────────────────────────────
+    if data == "show_faq":
+        logger.info(f"[Callback] User {user.id} mengklik 'Show FAQ Answer'.")
+        await _handle_show_faq(update, context, user)
 
-        async with AsyncSessionLocal() as session:
-            stmt = (
-                select(ChatLog.query)
-                .where(ChatLog.user_id == str(user.id))
-                .order_by(desc(ChatLog.created_at))
-                .limit(1)
-            )
-            result = await session.execute(stmt)
-            row = result.scalar_one_or_none()
-            last_query = row
+    # ───────────────────────────────────────────
+    # 2. Callback: show_sop:<filename>
+    # ───────────────────────────────────────────
+    elif data.startswith("show_sop:"):
+        filename = data[len("show_sop:"):]
+        logger.info(f"[Callback] User {user.id} mengklik 'Show SOP: {filename}'.")
+        await _handle_show_sop(update, context, user, filename)
 
-    except Exception as db_exc:
-        logger.error(f"[Callback] Gagal mengambil query dari DB: {db_exc}", exc_info=True)
+    # ───────────────────────────────────────────
+    # 3. Callback: rec:<idx>
+    # ───────────────────────────────────────────
+    elif data.startswith("rec:"):
+        try:
+            idx = int(data[len("rec:"):])
+        except ValueError:
+            logger.warning(f"[Callback] Index rekomendasi tidak valid: '{data}'")
+            return
+        logger.info(f"[Callback] User {user.id} mengklik rekomendasi #{idx}.")
+        await _handle_recommended_question(update, context, user, idx)
+
+    else:
+        logger.warning(f"[Callback] Callback data tidak dikenali: '{data}'")
+
+
+async def _handle_show_faq(update, context, user):
+    """Sub-handler: Ambil dan tampilkan jawaban dari koleksi FAQ."""
+    last_query = context.user_data.get("last_query")
+
+    if not last_query:
+        # Fallback: ambil query terakhir dari DB
+        try:
+            from backend.api.database import AsyncSessionLocal
+            from backend.api.models import ChatLog
+            from sqlalchemy import select, desc
+
+            async with AsyncSessionLocal() as session:
+                stmt = (
+                    select(ChatLog.query)
+                    .where(ChatLog.user_id == str(user.id))
+                    .order_by(desc(ChatLog.created_at))
+                    .limit(1)
+                )
+                result = await session.execute(stmt)
+                last_query = result.scalar_one_or_none()
+        except Exception as db_exc:
+            logger.error(f"[Callback-FAQ] Gagal mengambil query dari DB: {db_exc}", exc_info=True)
 
     if not last_query:
         await context.bot.send_message(
@@ -350,9 +420,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         )
         return
 
-    # --- Jalankan FAQ retrieval + generation ---
     try:
-        import asyncio
         from backend.rag.retriever import retrieve_faq
         from backend.rag.generator import generate_faq_answer, FALLBACK_RESPONSE
 
@@ -369,11 +437,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             )
             return
 
-        faq_answer = await asyncio.to_thread(generate_faq_answer, last_query, faq_docs)
+        faq_answer, _ = await asyncio.to_thread(generate_faq_answer, last_query, faq_docs)
         formatted_faq = format_llm_output(faq_answer)
 
         logger.info(
-            f"[Callback] FAQ answer di-generate untuk user {user.id}. "
+            f"[Callback-FAQ] FAQ answer di-generate untuk user {user.id}. "
             f"Score: {faq_score:.4f}, Panjang: {len(faq_answer)} karakter."
         )
 
@@ -384,8 +452,174 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
     except Exception as exc:
-        logger.error(f"[Callback] Error saat generate FAQ: {exc}", exc_info=True)
+        logger.error(f"[Callback-FAQ] Error saat generate FAQ: {exc}", exc_info=True)
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
             text="⚠️ Sorry, a technical error occurred while fetching the FAQ answer.",
+        )
+
+
+async def _handle_show_sop(update, context, user, filename: str):
+    """Sub-handler: Ambil dokumen SOP berdasarkan nama file dan tampilkan jawaban."""
+    last_query = context.user_data.get("last_query", "")
+
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id,
+        action=ChatAction.TYPING,
+    )
+
+    try:
+        from backend.rag.retriever import get_parent_document_by_filename
+        from backend.rag.generator import generate_sop_answer, FALLBACK_RESPONSE
+
+        sop_doc = await asyncio.to_thread(get_parent_document_by_filename, filename)
+
+        if sop_doc is None:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=(
+                    f"⚠️ <i>Could not load the document <b>{filename}</b>. "
+                    "It may have been removed or re-indexed. "
+                    "Please contact the organizing committee if this persists.</i>"
+                ),
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        label = filename.replace(".pdf", "").replace("_", " ")
+        sop_answer, _ = await asyncio.to_thread(
+            generate_sop_answer, last_query or f"What does {filename} say?", sop_doc
+        )
+        formatted_sop = format_llm_output(sop_answer)
+
+        logger.info(
+            f"[Callback-SOP] SOP answer dari '{filename}' di-generate untuk user {user.id}. "
+            f"Panjang: {len(sop_answer)} karakter."
+        )
+
+        from telegram.error import BadRequest
+        try:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"📄 <b>From: {label}</b>\n\n{formatted_sop}",
+                parse_mode=ParseMode.HTML,
+            )
+        except BadRequest as e:
+            logger.warning(f"[Callback-SOP] Gagal parse HTML ({e}), fallback ke plain text.")
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"📄 From: {label}\n\n{sop_answer}",
+            )
+
+    except Exception as exc:
+        logger.error(f"[Callback-SOP] Error saat generate SOP '{filename}': {exc}", exc_info=True)
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="⚠️ Sorry, a technical error occurred while loading the SOP document.",
+        )
+
+
+async def _handle_recommended_question(update, context, user, idx: int):
+    """
+    Sub-handler: Proses pertanyaan lanjutan yang dipilih user.
+
+    Alur:
+      1. Ambil teks pertanyaan dari context.user_data["rec_queries"][idx].
+      2. Kirim pesan label di obrolan agar percakapan terlihat runtut.
+      3. Proses pertanyaan tersebut melalui RAG workflow secara otomatis.
+    """
+    rec_queries: list = context.user_data.get("rec_queries", [])
+
+    if idx >= len(rec_queries):
+        logger.warning(f"[Callback-Rec] Index {idx} di luar batas (total: {len(rec_queries)}).")
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="⚠️ This suggested question is no longer available. Please type your question.",
+        )
+        return
+
+    selected_question = rec_queries[idx]
+    logger.info(f"[Callback-Rec] User {user.id} memilih pertanyaan #{idx}: '{selected_question}'")
+
+    # Kirim label pertanyaan terpilih agar percakapan terlihat logis
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=f"❓ <b>Suggested Question:</b>\n<i>{selected_question}</i>",
+        parse_mode=ParseMode.HTML,
+    )
+
+    # Kirim sinyal "typing..." agar user tahu bot sedang memproses
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id,
+        action=ChatAction.TYPING,
+    )
+
+    # Proses pertanyaan melalui RAG workflow
+    try:
+        from backend.api.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db_session:
+            answer, score, has_both, other_sops, new_rec_qs = await run_agentic_workflow(
+                query=selected_question,
+                user_id=str(user.id),
+                db_session=db_session,
+            )
+
+        # Update state rekomendasi untuk kemungkinan klik tombol berikutnya
+        context.user_data["rec_queries"] = new_rec_qs
+        context.user_data["last_query"] = selected_question
+
+        formatted_answer = format_llm_output(answer)
+
+        # Tambahkan penanda untuk SOP/FAQ lain jika ada
+        extra_info_parts = []
+        if has_both:
+            extra_info_parts.append(
+                "💡 <i>A short community FAQ answer is also available for this topic.</i>"
+            )
+        if other_sops:
+            names = ", ".join(
+                s["filename"].replace(".pdf", "").replace("_", " ")
+                for s in other_sops
+            )
+            extra_info_parts.append(
+                f"📑 <i>This topic also appears in: {names}.</i>"
+            )
+        if extra_info_parts:
+            formatted_answer += "\n\n" + "\n".join(extra_info_parts)
+
+        reply_markup = _build_inline_keyboard(has_both, other_sops, new_rec_qs)
+
+        from telegram.error import BadRequest
+        try:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=formatted_answer,
+                parse_mode=ParseMode.HTML,
+                reply_markup=reply_markup,
+            )
+        except BadRequest as e:
+            logger.warning(f"[Callback-Rec] Gagal parse HTML ({e}), fallback ke plain text.")
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=answer,
+                reply_markup=reply_markup,
+            )
+
+        # Log ke database
+        await _log_chat_to_db(
+            user_id=str(user.id),
+            query=selected_question,
+            answer=formatted_answer,
+            similarity_score=score,
+        )
+
+    except Exception as exc:
+        logger.error(
+            f"[Callback-Rec] Error saat memproses pertanyaan rekomendasi: {exc}",
+            exc_info=True,
+        )
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="⚠️ Sorry, a technical error occurred while processing this question.",
         )

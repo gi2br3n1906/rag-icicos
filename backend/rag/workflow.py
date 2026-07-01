@@ -22,21 +22,23 @@ Pendekatan Late Routing (menggantikan LLM-based Router):
     * Tidak ada   → fallback
 
 State yang dibawa sepanjang workflow:
-  - user_id         : ID user untuk mengambil histori dari DB
-  - original_query  : Pertanyaan asli user (tidak dimodifikasi)
-  - rewritten_query : Pertanyaan setelah direformulasi
-  - intent          : "SOP" | "FAQ" | "OTHER"
-  - sop_doc         : Parent Document SOP hasil retrieval
-  - faq_docs        : FAQ chunk list hasil retrieval
-  - has_both        : True jika query ditemukan di KEDUA database (SOP & FAQ)
-  - context_str     : String konteks untuk Verifier
-  - answer          : Jawaban final
-  - similarity_score: Skor terbaik dari retrieval
-  - db_session      : AsyncSession PostgreSQL (diinjeksikan dari luar)
+  - user_id               : ID user untuk mengambil histori dari DB
+  - original_query        : Pertanyaan asli user (tidak dimodifikasi)
+  - rewritten_query       : Pertanyaan setelah direformulasi
+  - intent                : "SOP" | "FAQ" | "OTHER"
+  - sop_doc               : Parent Document SOP hasil retrieval (primary/rank-1)
+  - faq_docs              : FAQ chunk list hasil retrieval
+  - has_both              : True jika query ditemukan di KEDUA database (SOP & FAQ)
+  - other_sops            : List dict SOP relevan lainnya [{filename, score}, ...]
+  - recommended_questions : List[str] pertanyaan lanjutan yang disarankan (max 3)
+  - context_str           : String konteks untuk Verifier
+  - answer                : Jawaban final
+  - similarity_score      : Skor terbaik dari retrieval
+  - db_session            : AsyncSession PostgreSQL (diinjeksikan dari luar)
 """
 import asyncio
 import logging
-from typing import Any, List, Optional, TypedDict
+from typing import Any, Dict, List, Optional, Tuple, TypedDict
 
 from langchain_core.documents import Document
 from langgraph.graph import END, StateGraph
@@ -66,14 +68,16 @@ class AgentState(TypedDict):
     user_id: str
     original_query: str
     rewritten_query: str
-    intent: str                   # "SOP" | "FAQ" | "OTHER"
+    intent: str                     # "SOP" | "FAQ" | "OTHER"
     sop_doc: Optional[Document]
     faq_docs: List[Document]
-    has_both: bool                # True jika ditemukan di kedua database
+    has_both: bool                  # True jika ditemukan di kedua database
+    other_sops: List[Dict]          # SOP relevan lainnya selain rank-1
+    recommended_questions: List[str]  # Pertanyaan lanjutan dari LLM
     context_str: str
     answer: str
     similarity_score: float
-    db_session: Any               # AsyncSession — tidak bisa di-type-hint ketat di TypedDict
+    db_session: Any                 # AsyncSession — tidak bisa di-type-hint ketat di TypedDict
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +118,7 @@ async def node_route(state: AgentState) -> AgentState:
        - Hanya score_sop >= 0.4                 → intent=SOP, has_both=False
        - Hanya score_faq >= 0.4                 → intent=FAQ, has_both=False
        - Tidak ada yang memenuhi threshold       → intent=OTHER
+    3. other_sops diisi dari hasil retrieve_sop.
 
     Keuntungan: tidak ada mismatch klasifikasi karena routing didasarkan pada
     data yang benar-benar ada di database, bukan prediksi LLM.
@@ -123,7 +128,7 @@ async def node_route(state: AgentState) -> AgentState:
     query = state["rewritten_query"]
 
     # Jalankan retrieval SOP dan FAQ secara paralel
-    (sop_doc, score_sop), (faq_docs, score_faq) = await asyncio.gather(
+    (sop_doc, score_sop, other_sops), (faq_docs, score_faq) = await asyncio.gather(
         asyncio.to_thread(retrieve_sop, query),
         asyncio.to_thread(retrieve_faq, query),
     )
@@ -135,7 +140,7 @@ async def node_route(state: AgentState) -> AgentState:
     if sop_available and faq_available:
         intent = "SOP"
         has_both = True
-        similarity_score = score_sop  # Gunakan skor SOP sebagai primary score
+        similarity_score = score_sop
         context_str = sop_doc.page_content
         logger.info(
             f"[Workflow] Late Routing: BOTH found. "
@@ -163,12 +168,19 @@ async def node_route(state: AgentState) -> AgentState:
             f"SOP={score_sop:.4f}, FAQ={score_faq:.4f} → fallback"
         )
 
+    if other_sops:
+        logger.info(
+            f"[Workflow] Other relevant SOPs detected: "
+            f"{[o['filename'] for o in other_sops]}"
+        )
+
     return {
         **state,
         "intent": intent,
         "sop_doc": sop_doc,
         "faq_docs": faq_docs,
         "has_both": has_both,
+        "other_sops": other_sops,
         "similarity_score": similarity_score,
         "context_str": context_str,
     }
@@ -178,38 +190,42 @@ async def node_generate_sop(state: AgentState) -> AgentState:
     """
     Node 3a: SOP Generator.
     Menghasilkan jawaban langkah-demi-langkah yang lengkap menggunakan SOP_SYSTEM_PROMPT.
+    Juga mengekstrak pertanyaan lanjutan dari output LLM.
     """
     logger.info("[Workflow] ► Node: generate_sop")
     sop_doc = state.get("sop_doc")
 
     if not sop_doc:
         logger.warning("[Workflow] generate_sop dipanggil tanpa sop_doc. Trigger fallback.")
-        return {**state, "answer": FALLBACK_RESPONSE}
+        return {**state, "answer": FALLBACK_RESPONSE, "recommended_questions": []}
 
-    answer = await asyncio.to_thread(
+    answer, follow_ups = await asyncio.to_thread(
         generate_sop_answer, state["rewritten_query"], sop_doc
     )
 
-    return {**state, "answer": answer}
+    logger.info(f"[Workflow] SOP answer generated. Follow-ups: {follow_ups}")
+    return {**state, "answer": answer, "recommended_questions": follow_ups}
 
 
 async def node_generate_faq(state: AgentState) -> AgentState:
     """
     Node 3b: FAQ Generator.
     Menghasilkan jawaban singkat (maks 3 kalimat) menggunakan FAQ_SYSTEM_PROMPT.
+    Juga mengekstrak pertanyaan lanjutan dari output LLM.
     """
     logger.info("[Workflow] ► Node: generate_faq")
     faq_docs = state.get("faq_docs", [])
 
     if not faq_docs:
         logger.warning("[Workflow] generate_faq dipanggil tanpa faq_docs. Trigger fallback.")
-        return {**state, "answer": FALLBACK_RESPONSE}
+        return {**state, "answer": FALLBACK_RESPONSE, "recommended_questions": []}
 
-    answer = await asyncio.to_thread(
+    answer, follow_ups = await asyncio.to_thread(
         generate_faq_answer, state["rewritten_query"], faq_docs
     )
 
-    return {**state, "answer": answer}
+    logger.info(f"[Workflow] FAQ answer generated. Follow-ups: {follow_ups}")
+    return {**state, "answer": answer, "recommended_questions": follow_ups}
 
 
 async def node_verify(state: AgentState) -> AgentState:
@@ -237,10 +253,11 @@ async def node_verify(state: AgentState) -> AgentState:
 async def node_fallback(state: AgentState) -> AgentState:
     """
     Node Terminal: Fallback.
-    Digunakan ketika tidak ada dokumen relevan ditemukan di kedua database.
+    Digunakan ketika intent = OTHER, atau ketika tidak ada dokumen relevan
+    yang ditemukan di database.
     """
     logger.info("[Workflow] ► Node: fallback")
-    return {**state, "answer": FALLBACK_RESPONSE, "similarity_score": 0.0}
+    return {**state, "answer": FALLBACK_RESPONSE, "similarity_score": 0.0, "recommended_questions": []}
 
 
 # ---------------------------------------------------------------------------
@@ -248,22 +265,12 @@ async def node_fallback(state: AgentState) -> AgentState:
 # ---------------------------------------------------------------------------
 
 def route_after_router(state: AgentState) -> str:
-    """
-    Menentukan node selanjutnya setelah node_route menentukan intent.
-    Intent sudah ditentukan secara deterministik berdasarkan similarity score,
-    sehingga routing di sini bersifat langsung tanpa logika tambahan.
-    """
+    """Menentukan node selanjutnya setelah Parallel Retrieval."""
     intent = state.get("intent", "OTHER")
-
     if intent == "SOP":
-        logger.info("[Workflow] Edge: SOP → generate_sop")
         return "generate_sop"
-
-    if intent == "FAQ":
-        logger.info("[Workflow] Edge: FAQ → generate_faq")
+    elif intent == "FAQ":
         return "generate_faq"
-
-    logger.info("[Workflow] Edge: OTHER → fallback")
     return "fallback"
 
 
@@ -292,22 +299,20 @@ def build_workflow():
     graph.set_entry_point("rewrite_query")
     graph.add_edge("rewrite_query", "route")
 
-    # Alur: Setelah Parallel Retrieval + Late Routing (bercabang)
+    # Alur: Setelah Router (bercabang)
     graph.add_conditional_edges(
         "route",
         route_after_router,
         {
-            "fallback": "fallback",
             "generate_sop": "generate_sop",
             "generate_faq": "generate_faq",
+            "fallback": "fallback",
         },
     )
 
-    # Alur: Generate → Verify → END
+    # Alur: Terminal nodes
     graph.add_edge("generate_sop", "verify")
     graph.add_edge("generate_faq", "verify")
-
-    # Alur: Terminal nodes
     graph.add_edge("verify", END)
     graph.add_edge("fallback", END)
 
@@ -326,7 +331,7 @@ async def run_agentic_workflow(
     query: str,
     user_id: str,
     db_session: Any = None,
-) -> tuple[str, float, bool]:
+) -> Tuple[str, float, bool, List[Dict], List[str]]:
     """
     Entry point utama untuk menjalankan seluruh Agentic Workflow.
     Dipanggil dari bot/handlers.py.
@@ -335,14 +340,14 @@ async def run_agentic_workflow(
         query     : Pertanyaan teks asli dari user.
         user_id   : ID user (Telegram user ID sebagai string).
         db_session: AsyncSession PostgreSQL untuk mengambil histori chat.
-                    Opsional — jika None, Memory dinonaktifkan.
 
     Returns:
-        Tuple[str, float, bool]:
-          - str  : Jawaban final yang siap dikirim ke user.
-          - float: Similarity score tertinggi dari retrieval (0.0 jika fallback).
-          - bool : has_both — True jika query ditemukan di kedua database SOP & FAQ,
-                   menandakan bot perlu melampirkan tombol "Show FAQ Answer" di Telegram.
+        Tuple[str, float, bool, List[Dict], List[str]]:
+          - str        : Jawaban final yang siap dikirim ke user.
+          - float      : Similarity score tertinggi dari retrieval.
+          - bool       : has_both — True jika ada jawaban di SOP & FAQ.
+          - List[Dict] : other_sops — daftar SOP relevan lainnya.
+          - List[str]  : recommended_questions — pertanyaan lanjutan yang disarankan.
     """
     logger.info(
         f"[Workflow] 🚀 Memulai Agentic Workflow untuk user '{user_id}': '{query[:80]}'"
@@ -351,11 +356,13 @@ async def run_agentic_workflow(
     initial_state: AgentState = {
         "user_id": user_id,
         "original_query": query,
-        "rewritten_query": query,   # Default: sama dengan asli (akan di-update Rewriter)
+        "rewritten_query": query,
         "intent": "OTHER",
         "sop_doc": None,
         "faq_docs": [],
         "has_both": False,
+        "other_sops": [],
+        "recommended_questions": [],
         "context_str": "",
         "answer": FALLBACK_RESPONSE,
         "similarity_score": 0.0,
@@ -367,16 +374,19 @@ async def run_agentic_workflow(
         answer = final_state.get("answer", FALLBACK_RESPONSE)
         score = final_state.get("similarity_score", 0.0)
         has_both = final_state.get("has_both", False)
+        other_sops = final_state.get("other_sops", [])
+        recommended_questions = final_state.get("recommended_questions", [])
 
         logger.info(
-            f"[Workflow] ✅ Selesai. Score={score:.4f}, "
-            f"has_both={has_both}, Panjang jawaban={len(answer)} karakter."
+            f"[Workflow] ✅ Selesai. Score={score:.4f}, has_both={has_both}, "
+            f"other_sops={len(other_sops)}, follow_ups={len(recommended_questions)}, "
+            f"Panjang jawaban={len(answer)} karakter."
         )
-        return answer, score, has_both
+        return answer, score, has_both, other_sops, recommended_questions
 
     except Exception as exc:
         logger.error(
             f"[Workflow] ❌ Error fatal pada Agentic Workflow: {exc}",
             exc_info=True,
         )
-        return FALLBACK_RESPONSE, 0.0, False
+        return FALLBACK_RESPONSE, 0.0, False, [], []

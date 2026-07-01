@@ -12,7 +12,7 @@ Mendukung tiga provider: OpenRouter, Google Gemini, dan Ollama Lokal.
 """
 import logging
 import os
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from langchain_core.documents import Document
 
@@ -35,6 +35,11 @@ ABSOLUTE RULES FOR SOP ANSWERS:
 7. Use bold <b>Step Title</b> for key step headers or terms.
 8. If the SOP document is not provided or is empty, state that information is not available and suggest contacting the organizing committee.
 9. TELEGRAM HTML FORMAT — Use ONLY: <b>, <i>, <u>, <s>, <code>, <pre>. NEVER use: <ul>, <ol>, <li>, <h1>-<h6>, <p>, or Markdown.
+10. FOLLOW-UP QUESTIONS — After your main answer, append EXACTLY the following delimiter on its own line, followed by EXACTLY 3 short, relevant follow-up questions (one per line) in English that the user is likely to ask next based on the topic and your answer. Do NOT number the questions:
+===FOLLOW_UP_QUESTIONS===
+<question 1>
+<question 2>
+<question 3>
 
 SOP Document:
 {context}
@@ -57,6 +62,11 @@ ABSOLUTE RULES FOR FAQ ANSWERS:
 5. STRICTLY FORBIDDEN to fabricate answers (hallucination).
 6. Go directly to the point. Do NOT add greetings or sign-offs.
 7. TELEGRAM HTML FORMAT — Use ONLY: <b>, <i>, <u>. NEVER use: <ul>, <ol>, <li>, or Markdown.
+8. FOLLOW-UP QUESTIONS — After your main answer, append EXACTLY the following delimiter on its own line, followed by EXACTLY 3 short, relevant follow-up questions (one per line) in English that the user is likely to ask next. Do NOT number the questions:
+===FOLLOW_UP_QUESTIONS===
+<question 1>
+<question 2>
+<question 3>
 
 FAQ Context:
 {context}
@@ -144,10 +154,46 @@ def _format_faq_context(docs: List[Document]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Helper: Parse follow-up questions dari output LLM
+# ---------------------------------------------------------------------------
+FOLLOW_UP_DELIMITER = "===FOLLOW_UP_QUESTIONS==="
+
+
+def _parse_answer_and_followups(raw_output: str) -> Tuple[str, List[str]]:
+    """
+    Memisahkan jawaban utama dan daftar pertanyaan lanjutan dari output mentah LLM.
+
+    Format yang diharapkan dari LLM:
+        <main answer text>
+        ===FOLLOW_UP_QUESTIONS===
+        <question 1>
+        <question 2>
+        <question 3>
+
+    Returns:
+        Tuple: (answer_text, follow_up_questions_list)
+        Jika delimiter tidak ditemukan, kembalikan semua sebagai jawaban utama
+        dengan list kosong.
+    """
+    if FOLLOW_UP_DELIMITER in raw_output:
+        parts = raw_output.split(FOLLOW_UP_DELIMITER, maxsplit=1)
+        answer_text = parts[0].strip()
+        followup_block = parts[1].strip()
+        follow_ups = [
+            q.strip() for q in followup_block.splitlines()
+            if q.strip() and not q.strip().startswith("===")
+        ][:3]  # Ambil maksimal 3 pertanyaan
+        return answer_text, follow_ups
+
+    logger.warning("[Generator] Delimiter follow-up tidak ditemukan di output LLM. Mengembalikan tanpa follow-ups.")
+    return raw_output.strip(), []
+
+
+# ---------------------------------------------------------------------------
 # Public API: Specialized generators untuk workflow baru
 # ---------------------------------------------------------------------------
 
-def generate_sop_answer(query: str, sop_doc: Document) -> str:
+def generate_sop_answer(query: str, sop_doc: Document) -> Tuple[str, List[str]]:
     """
     Menghasilkan jawaban untuk jalur SOP menggunakan SOP_SYSTEM_PROMPT.
     Jaminan: Seluruh isi SOP dikirimkan sebagai konteks — tidak ada langkah yang terlewat.
@@ -157,15 +203,17 @@ def generate_sop_answer(query: str, sop_doc: Document) -> str:
         sop_doc: Parent Document SOP utuh hasil ParentDocumentRetriever.
 
     Returns:
-        String jawaban berformat HTML Telegram.
+        Tuple: (answer_html, follow_up_questions) — jawaban berformat HTML Telegram
+        dan daftar 0-3 pertanyaan lanjutan dalam bahasa Inggris.
     """
     context = _format_sop_context(sop_doc)
     prompt = SOP_SYSTEM_PROMPT.format(context=context, question=query)
     logger.info(f"[Generator-SOP] Mengirim SOP ({len(context):,} karakter) ke LLM.")
-    return _dispatch(prompt)
+    raw = _dispatch(prompt)
+    return _parse_answer_and_followups(raw)
 
 
-def generate_faq_answer(query: str, faq_docs: List[Document]) -> str:
+def generate_faq_answer(query: str, faq_docs: List[Document]) -> Tuple[str, List[str]]:
     """
     Menghasilkan jawaban singkat untuk jalur FAQ menggunakan FAQ_SYSTEM_PROMPT.
 
@@ -174,12 +222,14 @@ def generate_faq_answer(query: str, faq_docs: List[Document]) -> str:
         faq_docs: List chunk FAQ yang relevan dari ChromaDB.
 
     Returns:
-        String jawaban singkat berformat HTML Telegram.
+        Tuple: (answer_html, follow_up_questions) — jawaban singkat berformat HTML Telegram
+        dan daftar 0-3 pertanyaan lanjutan dalam bahasa Inggris.
     """
     context = _format_faq_context(faq_docs)
     prompt = FAQ_SYSTEM_PROMPT.format(context=context, question=query)
     logger.info(f"[Generator-FAQ] Mengirim {len(faq_docs)} FAQ chunk ke LLM.")
-    return _dispatch(prompt)
+    raw = _dispatch(prompt)
+    return _parse_answer_and_followups(raw)
 
 
 # ---------------------------------------------------------------------------

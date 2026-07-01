@@ -192,10 +192,14 @@ async def _validate_other_sop(query: str, sop_info: Dict) -> Optional[Dict]:
     """
     Validasi apakah sebuah SOP kandidat benar-benar dapat menjawab query user.
 
-    Fetches parent document dan menjalankan generate_sop_answer di thread pool.
-    Jika hasilnya FALLBACK_RESPONSE → SOP dianggap tidak relevan → return None.
-    Jika ada jawaban nyata → return sop_info (lolos, layak ditampilkan sebagai Explore).
+    DUA gate validasi:
+    1. Hard check: jika generate_sop_answer mengembalikan FALLBACK_RESPONSE exact → buang.
+    2. Verifier check: jalankan verify_answer pada jawaban yang dihasilkan.
+       Ini menangkap kasus di mana LLM membuat response "not available in this document"
+       sendiri (bukan string FALLBACK_RESPONSE exact) — verifier mengenali bahwa jawaban
+       tersebut tidak berakar dari konten dokumen dan mengembalikan False.
 
+    Hanya SOP yang lolos KEDUA gate yang ditampilkan sebagai tombol Explore.
     Dijalankan secara paralel untuk semua kandidat via asyncio.gather.
     """
     filename = sop_info.get("filename", "")
@@ -207,16 +211,29 @@ async def _validate_other_sop(query: str, sop_info: Dict) -> Optional[Dict]:
 
         answer, _ = await asyncio.to_thread(generate_sop_answer, query, sop_doc)
 
+        # Gate 1: exact FALLBACK_RESPONSE check
         if answer == FALLBACK_RESPONSE:
-            logger.info(f"[Workflow] Validasi other_sop: '{filename}' → GAGAL (tidak ada jawaban untuk query ini).")
+            logger.info(f"[Workflow] Validasi other_sop: '{filename}' → GAGAL gate-1 (FALLBACK exact).")
             return None
 
-        logger.info(f"[Workflow] Validasi other_sop: '{filename}' → LULUS (ada jawaban relevan).")
+        # Gate 2: verifier — cek apakah jawaban benar-benar berakar dari dokumen ini.
+        # Menangkap kasus LLM menghasilkan "not available in this document" buatan sendiri.
+        is_grounded = await asyncio.to_thread(
+            verify_answer, query, sop_doc.page_content, answer
+        )
+        if not is_grounded:
+            logger.info(
+                f"[Workflow] Validasi other_sop: '{filename}' → GAGAL gate-2 (verifier: jawaban tidak berakar dari SOP ini)."
+            )
+            return None
+
+        logger.info(f"[Workflow] Validasi other_sop: '{filename}' → LULUS kedua gate.")
         return sop_info
 
     except Exception as exc:
         logger.error(f"[Workflow] Error saat validasi other_sop '{filename}': {exc}", exc_info=True)
         return None
+
 
 
 async def node_generate_sop(state: AgentState) -> AgentState:

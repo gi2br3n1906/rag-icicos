@@ -50,7 +50,7 @@ from backend.rag.generator import (
 )
 from backend.rag.memory import format_history_for_prompt, get_recent_history
 from backend.rag.query_rewriter import rewrite_query
-from backend.rag.retriever import retrieve_faq, retrieve_sop
+from backend.rag.retriever import get_parent_document_by_filename, retrieve_faq, retrieve_sop
 from backend.rag.verifier import verify_answer
 
 logger = logging.getLogger(__name__)
@@ -188,25 +188,75 @@ async def node_route(state: AgentState) -> AgentState:
     }
 
 
+async def _validate_other_sop(query: str, sop_info: Dict) -> Optional[Dict]:
+    """
+    Validasi apakah sebuah SOP kandidat benar-benar dapat menjawab query user.
+
+    Fetches parent document dan menjalankan generate_sop_answer di thread pool.
+    Jika hasilnya FALLBACK_RESPONSE → SOP dianggap tidak relevan → return None.
+    Jika ada jawaban nyata → return sop_info (lolos, layak ditampilkan sebagai Explore).
+
+    Dijalankan secara paralel untuk semua kandidat via asyncio.gather.
+    """
+    filename = sop_info.get("filename", "")
+    try:
+        sop_doc = await asyncio.to_thread(get_parent_document_by_filename, filename)
+        if sop_doc is None:
+            logger.warning(f"[Workflow] Validasi other_sop: '{filename}' tidak ditemukan di docstore.")
+            return None
+
+        answer, _ = await asyncio.to_thread(generate_sop_answer, query, sop_doc)
+
+        if answer == FALLBACK_RESPONSE:
+            logger.info(f"[Workflow] Validasi other_sop: '{filename}' → GAGAL (tidak ada jawaban untuk query ini).")
+            return None
+
+        logger.info(f"[Workflow] Validasi other_sop: '{filename}' → LULUS (ada jawaban relevan).")
+        return sop_info
+
+    except Exception as exc:
+        logger.error(f"[Workflow] Error saat validasi other_sop '{filename}': {exc}", exc_info=True)
+        return None
+
+
 async def node_generate_sop(state: AgentState) -> AgentState:
     """
     Node 3a: SOP Generator.
-    Menghasilkan jawaban langkah-demi-langkah yang lengkap menggunakan SOP_SYSTEM_PROMPT.
-    Juga mengekstrak pertanyaan lanjutan dari output LLM.
+    Menghasilkan jawaban dari primary SOP dan memvalidasi other_sops secara paralel.
+
+    Validasi other_sops: untuk setiap SOP kandidat, dokumen-nya diambil dan
+    query yang sama dikirimkan ke LLM. Jika LLM tidak menemukan jawaban (FALLBACK),
+    SOP tersebut dibuang dari other_sops sehingga tombol Explore tidak pernah
+    menampilkan SOP yang tidak bisa menjawab pertanyaan user.
     """
     logger.info("[Workflow] ► Node: generate_sop")
     sop_doc = state.get("sop_doc")
+    query = state["rewritten_query"]
+    other_sops_candidates = state.get("other_sops", [])
 
     if not sop_doc:
         logger.warning("[Workflow] generate_sop dipanggil tanpa sop_doc. Trigger fallback.")
-        return {**state, "answer": FALLBACK_RESPONSE, "recommended_questions": []}
+        return {**state, "answer": FALLBACK_RESPONSE, "recommended_questions": [], "other_sops": []}
 
-    answer, follow_ups = await asyncio.to_thread(
-        generate_sop_answer, state["rewritten_query"], sop_doc
-    )
+    # Jalankan primary answer generation + other_sops validation secara paralel
+    tasks = [asyncio.to_thread(generate_sop_answer, query, sop_doc)]
+    for sop_info in other_sops_candidates:
+        tasks.append(_validate_other_sop(query, sop_info))
+
+    results = await asyncio.gather(*tasks)
+
+    # Pisahkan hasil
+    answer, follow_ups = results[0]
+    validated_sops = [r for r in results[1:] if r is not None]
+
+    if other_sops_candidates:
+        logger.info(
+            f"[Workflow] Validasi other_sops selesai: "
+            f"{len(other_sops_candidates)} kandidat → {len(validated_sops)} lolos."
+        )
 
     logger.info(f"[Workflow] SOP answer generated. Follow-ups: {follow_ups}")
-    return {**state, "answer": answer, "recommended_questions": follow_ups}
+    return {**state, "answer": answer, "recommended_questions": follow_ups, "other_sops": validated_sops}
 
 
 async def node_generate_faq(state: AgentState) -> AgentState:

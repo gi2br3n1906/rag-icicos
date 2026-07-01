@@ -123,26 +123,22 @@ def _build_reply_keyboard(
     """
     Membangun SATU ReplyKeyboardMarkup terpadu berisi:
       - [Opsional] Tombol FAQ (jika has_both=True)
-      - [Opsional] Tombol Explore SOP lain (satu per SOP)
+      - [Opsional] Tombol Explore SOP lain yang SUDAH DIVALIDASI (satu per SOP)
       - Tombol pertanyaan lanjutan (max 3)
 
-    Semua tombol muncul di atas keyboard user — tidak ada bubble chat tambahan,
-    tidak ada InlineKeyboard.
-
-    Returns:
-        ReplyKeyboardMarkup atau None jika tidak ada tombol sama sekali.
+    Tombol Explore hanya muncul jika workflow.py sudah memverifikasi bahwa
+    SOP tersebut benar-benar dapat menjawab query user (eager pre-validation).
     """
     buttons = []
 
-    # Tombol FAQ (baris sendiri karena label berbeda)
+    # Tombol FAQ (jika ada jawaban dari koleksi WhatsApp FAQ)
     if has_both:
         buttons.append([KeyboardButton(_FAQ_BTN_PREFIX)])
 
-    # Tombol Explore SOP lain (simpan filename di user_data, bukan di teks tombol)
+    # Tombol Explore SOP lain — sudah dijamin relevan oleh workflow validator
     for sop in other_sops:
         filename = sop.get("filename", "")
         label = filename.replace(".pdf", "").replace("_", " ")
-        # Label tombol = prefix + nama dokumen (dipakai untuk routing di handle_message)
         buttons.append([KeyboardButton(f"{_SOP_BTN_PREFIX}{label}")])
 
     # Tombol pertanyaan lanjutan

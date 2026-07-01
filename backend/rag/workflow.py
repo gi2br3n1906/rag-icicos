@@ -78,6 +78,7 @@ class AgentState(TypedDict):
     answer: str
     similarity_score: float
     db_session: Any                 # AsyncSession — tidak bisa di-type-hint ketat di TypedDict
+    is_recommendation: bool         # True jika ini dari klik tombol saran
 
 
 # ---------------------------------------------------------------------------
@@ -126,15 +127,16 @@ async def node_route(state: AgentState) -> AgentState:
     logger.info("[Workflow] ► Node: route (Parallel Retrieval)")
 
     query = state["rewritten_query"]
+    threshold = 0.3 if state.get("is_recommendation") else RETRIEVAL_THRESHOLD
 
     # Jalankan retrieval SOP dan FAQ secara paralel
     (sop_doc, score_sop, other_sops), (faq_docs, score_faq) = await asyncio.gather(
-        asyncio.to_thread(retrieve_sop, query),
-        asyncio.to_thread(retrieve_faq, query),
+        asyncio.to_thread(retrieve_sop, query, threshold),
+        asyncio.to_thread(retrieve_faq, query, threshold),
     )
 
-    sop_available = sop_doc is not None and score_sop >= RETRIEVAL_THRESHOLD
-    faq_available = len(faq_docs) > 0 and score_faq >= RETRIEVAL_THRESHOLD
+    sop_available = sop_doc is not None and score_sop >= threshold
+    faq_available = len(faq_docs) > 0 and score_faq >= threshold
 
     # Tentukan intent dan has_both secara deterministik
     if sop_available and faq_available:
@@ -331,15 +333,17 @@ async def run_agentic_workflow(
     query: str,
     user_id: str,
     db_session: Any = None,
+    is_recommendation: bool = False,
 ) -> Tuple[str, float, bool, List[Dict], List[str]]:
     """
     Entry point utama untuk menjalankan seluruh Agentic Workflow.
     Dipanggil dari bot/handlers.py.
 
     Args:
-        query     : Pertanyaan teks asli dari user.
-        user_id   : ID user (Telegram user ID sebagai string).
-        db_session: AsyncSession PostgreSQL untuk mengambil histori chat.
+        query             : Pertanyaan teks asli dari user.
+        user_id           : ID user (Telegram user ID sebagai string).
+        db_session        : AsyncSession PostgreSQL untuk mengambil histori chat.
+        is_recommendation : True jika ini merupakan pertanyaan lanjutan yang disarankan.
 
     Returns:
         Tuple[str, float, bool, List[Dict], List[str]]:
@@ -367,6 +371,7 @@ async def run_agentic_workflow(
         "answer": FALLBACK_RESPONSE,
         "similarity_score": 0.0,
         "db_session": db_session,
+        "is_recommendation": is_recommendation,
     }
 
     try:

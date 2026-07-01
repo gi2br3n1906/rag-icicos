@@ -284,33 +284,44 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "directly if the problem persists."
         )
 
+    is_fallback = (answer == FALLBACK_RESPONSE)
+
     # Simpan konteks rekomendasi di sesi user agar bisa diakses callback handler
-    context.user_data["rec_queries"] = recommended_questions
-    context.user_data["last_query"] = user_query
+    if not is_fallback:
+        context.user_data["rec_queries"] = recommended_questions
+        context.user_data["last_query"] = user_query
+    else:
+        context.user_data["rec_queries"] = []
+        context.user_data["last_query"] = None
 
     # Format jawaban (bold/italic LLM → HTML Telegram)
     formatted_answer = format_llm_output(answer)
 
     # Tambahkan penanda jika ada SOP/FAQ lain yang tersedia
     extra_info_parts = []
-    if has_both:
-        extra_info_parts.append(
-            "💡 <i>A short community FAQ answer is also available for this topic.</i>"
-        )
-    if other_sops:
-        names = ", ".join(
-            s["filename"].replace(".pdf", "").replace("_", " ")
-            for s in other_sops
-        )
-        extra_info_parts.append(
-            f"📑 <i>This topic also appears in: {names}. Tap a button below to explore.</i>"
-        )
+    if not is_fallback:
+        if has_both:
+            extra_info_parts.append(
+                "💡 <i>A short community FAQ answer is also available for this topic.</i>"
+            )
+        if other_sops:
+            names = ", ".join(
+                s["filename"].replace(".pdf", "").replace("_", " ")
+                for s in other_sops
+            )
+            extra_info_parts.append(
+                f"📑 <i>This topic also appears in: {names}. Tap a button below to explore.</i>"
+            )
 
     if extra_info_parts:
         formatted_answer += "\n\n" + "\n".join(extra_info_parts)
 
     # Bangun keyboard tombol inline
-    reply_markup = _build_inline_keyboard(has_both, other_sops, recommended_questions)
+    reply_markup = _build_inline_keyboard(
+        has_both if not is_fallback else False,
+        other_sops if not is_fallback else [],
+        recommended_questions if not is_fallback else []
+    )
 
     from telegram.error import BadRequest
 
@@ -563,32 +574,44 @@ async def _handle_recommended_question(update, context, user, idx: int):
                 query=selected_question,
                 user_id=str(user.id),
                 db_session=db_session,
+                is_recommendation=True,
             )
 
+        is_fallback = (answer == FALLBACK_RESPONSE)
+
         # Update state rekomendasi untuk kemungkinan klik tombol berikutnya
-        context.user_data["rec_queries"] = new_rec_qs
-        context.user_data["last_query"] = selected_question
+        if not is_fallback:
+            context.user_data["rec_queries"] = new_rec_qs
+            context.user_data["last_query"] = selected_question
+        else:
+            context.user_data["rec_queries"] = []
+            context.user_data["last_query"] = None
 
         formatted_answer = format_llm_output(answer)
 
         # Tambahkan penanda untuk SOP/FAQ lain jika ada
         extra_info_parts = []
-        if has_both:
-            extra_info_parts.append(
-                "💡 <i>A short community FAQ answer is also available for this topic.</i>"
-            )
-        if other_sops:
-            names = ", ".join(
-                s["filename"].replace(".pdf", "").replace("_", " ")
-                for s in other_sops
-            )
-            extra_info_parts.append(
-                f"📑 <i>This topic also appears in: {names}.</i>"
-            )
+        if not is_fallback:
+            if has_both:
+                extra_info_parts.append(
+                    "💡 <i>A short community FAQ answer is also available for this topic.</i>"
+                )
+            if other_sops:
+                names = ", ".join(
+                    s["filename"].replace(".pdf", "").replace("_", " ")
+                    for s in other_sops
+                )
+                extra_info_parts.append(
+                    f"📑 <i>This topic also appears in: {names}.</i>"
+                )
         if extra_info_parts:
             formatted_answer += "\n\n" + "\n".join(extra_info_parts)
 
-        reply_markup = _build_inline_keyboard(has_both, other_sops, new_rec_qs)
+        reply_markup = _build_inline_keyboard(
+            has_both if not is_fallback else False,
+            other_sops if not is_fallback else [],
+            new_rec_qs if not is_fallback else []
+        )
 
         from telegram.error import BadRequest
         try:

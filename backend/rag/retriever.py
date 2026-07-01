@@ -73,7 +73,7 @@ def get_parent_document_by_filename(filename: str) -> Optional[Document]:
         return None
 
 
-def retrieve_sop(query: str) -> Tuple[Optional[Document], float, List[Dict]]:
+def retrieve_sop(query: str, threshold: Optional[float] = None) -> Tuple[Optional[Document], float, List[Dict]]:
     """
     Mengambil dokumen SOP menggunakan ParentDocumentRetriever.
 
@@ -88,6 +88,7 @@ def retrieve_sop(query: str) -> Tuple[Optional[Document], float, List[Dict]]:
     """
     logger.info(f"[Retriever-SOP] Mencari SOP untuk query: '{query[:60]}'")
 
+    active_threshold = threshold if threshold is not None else SIMILARITY_THRESHOLD
     try:
         vectorstore = _get_sop_vectorstore()
         raw_store = LocalFileStore(PARENT_STORE_DIR)
@@ -123,13 +124,13 @@ def retrieve_sop(query: str) -> Tuple[Optional[Document], float, List[Dict]]:
         # Filter hanya yang memenuhi threshold
         relevant_sources = {
             src: sc for src, sc in best_score_per_source.items()
-            if sc >= SIMILARITY_THRESHOLD
+            if sc >= active_threshold
         }
 
         if not relevant_sources:
-            best_global_score = max(best_score_per_source.values())
+            best_global_score = max(best_score_per_source.values()) if best_score_per_source else 0.0
             logger.warning(
-                f"[Retriever-SOP] Tidak ada source yang melebihi threshold {SIMILARITY_THRESHOLD}. "
+                f"[Retriever-SOP] Tidak ada source yang melebihi threshold {active_threshold}. "
                 f"Skor tertinggi: {best_global_score:.4f}"
             )
             return None, best_global_score, []
@@ -180,7 +181,7 @@ def retrieve_sop(query: str) -> Tuple[Optional[Document], float, List[Dict]]:
         return None, 0.0, []
 
 
-def retrieve_faq(query: str) -> Tuple[List[Document], float]:
+def retrieve_faq(query: str, threshold: Optional[float] = None) -> Tuple[List[Document], float]:
     """
     Mengambil beberapa FAQ chunk yang relevan dari ChromaDB (collection: icicos_faq).
     Menggunakan pencarian vektor standar dengan Top-K=4.
@@ -192,6 +193,7 @@ def retrieve_faq(query: str) -> Tuple[List[Document], float]:
     """
     logger.info(f"[Retriever-FAQ] Mencari FAQ untuk query: '{query[:60]}'")
 
+    active_threshold = threshold if threshold is not None else SIMILARITY_THRESHOLD
     try:
         vectorstore = _get_faq_vectorstore()
         results_with_scores = vectorstore.similarity_search_with_relevance_scores(
@@ -202,8 +204,15 @@ def retrieve_faq(query: str) -> Tuple[List[Document], float]:
             logger.warning("[Retriever-FAQ] Tidak ada FAQ yang cocok.")
             return [], 0.0
 
-        docs = [doc for doc, _ in results_with_scores]
-        best_score = max(score for _, score in results_with_scores)
+        # Filter by active_threshold
+        relevant_results = [(doc, score) for doc, score in results_with_scores if score >= active_threshold]
+        if not relevant_results:
+            best_global_score = max(score for _, score in results_with_scores)
+            logger.warning(f"[Retriever-FAQ] Tidak ada FAQ melebihi threshold {active_threshold}. Skor tertinggi: {best_global_score:.4f}")
+            return [], best_global_score
+
+        docs = [doc for doc, _ in relevant_results]
+        best_score = max(score for _, score in relevant_results)
         logger.info(f"[Retriever-FAQ] Ditemukan {len(docs)} FAQ chunk. Skor: {best_score:.4f}")
         return docs, best_score
 

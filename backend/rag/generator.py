@@ -35,7 +35,7 @@ ABSOLUTE RULES FOR SOP ANSWERS:
 7. Use bold <b>Step Title</b> for key step headers or terms.
 8. If the SOP document is not provided or is empty, state that information is not available and suggest contacting the organizing committee.
 9. TELEGRAM HTML FORMAT — Use ONLY: <b>, <i>, <u>, <s>, <code>, <pre>. NEVER use: <ul>, <ol>, <li>, <h1>-<h6>, <p>, or Markdown.
-10. FOLLOW-UP QUESTIONS — After your main answer, append EXACTLY the following delimiter on its own line, followed by EXACTLY 3 short, relevant follow-up questions (one per line) in English that the user is likely to ask next based on the topic and your answer. Do NOT number the questions:
+10. FOLLOW-UP QUESTIONS — After your main answer, append EXACTLY the following delimiter on its own line, followed by EXACTLY 3 short, relevant follow-up questions (one per line) in English that the user is likely to ask next. Crucially, these questions MUST be directly and fully answerable using ONLY the information present in the provided SOP Document. Do NOT suggest questions that cannot be answered by the document. Do NOT number the questions:
 ===FOLLOW_UP_QUESTIONS===
 <question 1>
 <question 2>
@@ -62,7 +62,7 @@ ABSOLUTE RULES FOR FAQ ANSWERS:
 5. STRICTLY FORBIDDEN to fabricate answers (hallucination).
 6. Go directly to the point. Do NOT add greetings or sign-offs.
 7. TELEGRAM HTML FORMAT — Use ONLY: <b>, <i>, <u>. NEVER use: <ul>, <ol>, <li>, or Markdown.
-8. FOLLOW-UP QUESTIONS — After your main answer, append EXACTLY the following delimiter on its own line, followed by EXACTLY 3 short, relevant follow-up questions (one per line) in English that the user is likely to ask next. Do NOT number the questions:
+8. FOLLOW-UP QUESTIONS — After your main answer, append EXACTLY the following delimiter on its own line, followed by EXACTLY 3 short, relevant follow-up questions (one per line) in English that the user is likely to ask next. Crucially, these questions MUST be directly and fully answerable using ONLY the information present in the provided FAQ Context. Do NOT suggest questions that cannot be answered by the context. Do NOT number the questions:
 ===FOLLOW_UP_QUESTIONS===
 <question 1>
 <question 2>

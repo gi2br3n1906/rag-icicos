@@ -136,10 +136,9 @@ def _build_inline_keyboard(
         filename = sop.get("filename", "")
         # Tampilkan nama file tanpa ekstensi untuk label yang bersih
         label = filename.replace(".pdf", "").replace("_", " ")
-        score = sop.get("score", 0.0)
         rows.append([
             InlineKeyboardButton(
-                f"📄 More: {label} ({score:.2f})",
+                f"🔍 Explore: {label}",
                 callback_data=f"show_sop:{filename}"
             )
         ])
@@ -311,7 +310,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 for s in other_sops
             )
             extra_info_parts.append(
-                f"📑 <i>This topic also appears in: {names}. Tap a button below to explore.</i>"
+                f"🔍 <i>Related document available: {names}. Content may differ from this answer.</i>"
             )
 
     if extra_info_parts:

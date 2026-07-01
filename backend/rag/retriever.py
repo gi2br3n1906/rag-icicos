@@ -26,6 +26,10 @@ logger = logging.getLogger(__name__)
 CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "./data/chroma_db")
 PARENT_STORE_DIR = os.getenv("PARENT_STORE_DIR", "./data/parent_store")
 SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.4"))
+# Threshold khusus untuk other_sops — lebih tinggi agar tombol rekomendasi SOP
+# hanya muncul jika dokumen lain BENAR-BENAR relevan dengan topik yang ditanya,
+# bukan sekadar menyebut kata kunci yang sama secara sepintas.
+OTHER_SOPS_THRESHOLD = float(os.getenv("OTHER_SOPS_THRESHOLD", "0.65"))
 
 
 import threading
@@ -190,17 +194,31 @@ def retrieve_sop(query: str, threshold: Optional[float] = None) -> Tuple[Optiona
             f"({len(primary_doc.page_content):,} karakter)"
         )
 
-        # Build other_sops list (semua relevan selain primary)
+        # Build other_sops list — hanya SOP dengan skor >= OTHER_SOPS_THRESHOLD
+        # untuk menghindari false positive (SOP yang sekadar menyebut kata kunci
+        # tapi tidak benar-benar membahas topik yang ditanyakan user).
         other_sops = [
             {"filename": src, "score": sc}
             for src, sc in sorted_sources[1:]  # Skip rank-1
+            if sc >= OTHER_SOPS_THRESHOLD
         ]
 
         if other_sops:
+            other_sops_summary = [(o["filename"], round(o["score"], 4)) for o in other_sops]
             logger.info(
-                f"[Retriever-SOP] Other SOPs ditemukan: "
-                f"{[o['filename'] for o in other_sops]}"
+                f"[Retriever-SOP] Other SOPs ditemukan (score >= {OTHER_SOPS_THRESHOLD}): "
+                f"{other_sops_summary}"
             )
+        else:
+            # Log candidates yang tidak lolos threshold agar mudah di-debug
+            skipped = [
+                (src, f"{sc:.4f}")
+                for src, sc in sorted_sources[1:]
+            ]
+            if skipped:
+                logger.info(
+                    f"[Retriever-SOP] Kandidat other_sops tidak lolos threshold {OTHER_SOPS_THRESHOLD}: {skipped}"
+                )
 
         return primary_doc, primary_score, other_sops
 

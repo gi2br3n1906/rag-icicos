@@ -28,22 +28,50 @@ PARENT_STORE_DIR = os.getenv("PARENT_STORE_DIR", "./data/parent_store")
 SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.4"))
 
 
-def _get_sop_vectorstore() -> Chroma:
-    """Koneksi ke ChromaDB collection SOP (berisi child chunks)."""
-    return Chroma(
-        persist_directory=CHROMA_PERSIST_DIR,
-        embedding_function=get_embeddings(),
-        collection_name="icicos_sop",
-    )
+import threading
+
+# ---------------------------------------------------------------------------
+# Singleton ChromaDB vectorstore instances — Thread-safe (Double-Checked Lock)
+# ---------------------------------------------------------------------------
+# ChromaDB's Rust bindings are NOT safe for parallel initialization.
+# When retrieve_sop and retrieve_faq run concurrently under asyncio.gather,
+# both threads hit chromadb.Client() at the same millisecond, causing:
+#   AttributeError: 'RustBindingsAPI' object has no attribute 'bindings'
+# Solution: load once, share the single instance across threads.
+
+_sop_vectorstore: Optional["Chroma"] = None
+_faq_vectorstore: Optional["Chroma"] = None
+_chroma_lock = threading.Lock()
 
 
-def _get_faq_vectorstore() -> Chroma:
-    """Koneksi ke ChromaDB collection FAQ (berisi chunk histori WhatsApp)."""
-    return Chroma(
-        persist_directory=CHROMA_PERSIST_DIR,
-        embedding_function=get_embeddings(),
-        collection_name="icicos_faq",
-    )
+def _get_sop_vectorstore() -> "Chroma":
+    """Thread-safe singleton untuk ChromaDB SOP collection."""
+    global _sop_vectorstore
+    if _sop_vectorstore is None:
+        with _chroma_lock:
+            if _sop_vectorstore is None:
+                logger.info("[Retriever] Inisialisasi Chroma SOP vectorstore (LOAD ONCE)")
+                _sop_vectorstore = Chroma(
+                    persist_directory=CHROMA_PERSIST_DIR,
+                    embedding_function=get_embeddings(),
+                    collection_name="icicos_sop",
+                )
+    return _sop_vectorstore
+
+
+def _get_faq_vectorstore() -> "Chroma":
+    """Thread-safe singleton untuk ChromaDB FAQ collection."""
+    global _faq_vectorstore
+    if _faq_vectorstore is None:
+        with _chroma_lock:
+            if _faq_vectorstore is None:
+                logger.info("[Retriever] Inisialisasi Chroma FAQ vectorstore (LOAD ONCE)")
+                _faq_vectorstore = Chroma(
+                    persist_directory=CHROMA_PERSIST_DIR,
+                    embedding_function=get_embeddings(),
+                    collection_name="icicos_faq",
+                )
+    return _faq_vectorstore
 
 
 def get_parent_document_by_filename(filename: str) -> Optional[Document]:

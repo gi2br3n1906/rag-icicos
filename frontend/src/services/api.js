@@ -105,5 +105,20 @@ export const exportFaqs = (status) => api.get('/api/whatsapp/export', {
   responseType: 'blob', // Penting untuk file download
 })
 
+/** GET /api/whatsapp/export/json — download seluruh tabel FAQ sebagai file JSON */
+export const exportFaqsJson = () => api.get('/api/whatsapp/export/json', {
+  responseType: 'blob',
+})
+
+/** POST /api/whatsapp/import/json — upload file JSON FAQ untuk diimport ke database & ChromaDB */
+export const importFaqsJson = (file) => {
+  const formData = new FormData()
+  formData.append('file', file)
+  return api.post('/api/whatsapp/import/json', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 120_000, // 2 menit untuk proses embed ke ChromaDB
+  })
+}
+
 /** POST /api/knowledge/reset — wipes ChromaDB and all DB records (destructive!) */
 export const resetKnowledgeBase = () => api.post('/api/knowledge/reset')

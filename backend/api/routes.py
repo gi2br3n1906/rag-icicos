@@ -2,11 +2,14 @@
 routes.py - Router endpoint Admin Dashboard API ICICoS 2026.
 
 Endpoint yang tersedia:
-  GET  /api/documents          → Daftar semua dokumen SOP ter-ingest
-  GET  /api/chat-logs          → Riwayat percakapan bot (analitik)
-  POST /api/documents/upload   → Upload + ingest SOP baru via LLM pipeline
+  GET  /api/documents                  → Daftar semua dokumen SOP ter-ingest
+  GET  /api/chat-logs                  → Riwayat percakapan bot (analitik)
+  POST /api/documents/upload           → Upload + ingest SOP baru via LLM pipeline
+  GET  /api/whatsapp/export/json       → Export seluruh tabel WhatsAppFAQ sebagai file JSON
+  POST /api/whatsapp/import/json       → Import file JSON FAQ ke database + embed approved ke ChromaDB
 """
 import asyncio
+import json
 import logging
 import shutil
 from pathlib import Path
@@ -667,8 +670,206 @@ async def export_faqs_pdf(
 
 
 # ---------------------------------------------------------------------------
-# Endpoint 9: DELETE /api/whatsapp/pending/{faq_id}
+# Endpoint 8c: GET /api/whatsapp/export/json
 # ---------------------------------------------------------------------------
+
+@router.get(
+    "/whatsapp/export/json",
+    summary="Export Semua FAQ ke JSON",
+    response_description="File JSON berisi seluruh data WhatsAppFAQ dari database",
+)
+async def export_faqs_json(
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Mengunduh seluruh tabel whatsapp_faqs (semua status) sebagai file JSON.
+    File ini dapat diimport kembali menggunakan endpoint POST /api/whatsapp/import/json
+    untuk memigrasikan database FAQ antar environment (misalnya dari local ke server).
+    """
+    stmt = select(WhatsAppFAQ).order_by(WhatsAppFAQ.created_at.asc())
+    result = await db.execute(stmt)
+    faqs = result.scalars().all()
+
+    payload = [
+        {
+            "question": f.question,
+            "answer": f.answer,
+            "category": f.category,
+            "status": f.status,
+            "source_file": f.source_file,
+        }
+        for f in faqs
+    ]
+
+    json_bytes = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+    stream = io.BytesIO(json_bytes)
+
+    logger.info(f"[Export FAQ JSON] Mengexport {len(faqs)} record FAQ ke JSON.")
+    return StreamingResponse(
+        stream,
+        media_type="application/json",
+        headers={"Content-Disposition": 'attachment; filename="faq_database_export.json"'},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Endpoint 8d: POST /api/whatsapp/import/json
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/whatsapp/import/json",
+    status_code=status.HTTP_200_OK,
+    summary="Import FAQ dari File JSON",
+    response_description="Ringkasan hasil import: jumlah diimpor, dilewati, dan di-embed",
+)
+async def import_faqs_json(
+    file: UploadFile = File(..., description="File JSON hasil export FAQ database"),
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """
+    Mengimport data FAQ dari file JSON hasil export.
+
+    Alur:
+      1. Baca dan parse file JSON.
+      2. Untuk setiap record: cek duplikasi berdasarkan (question, source_file).
+      3. Sisipkan record baru ke PostgreSQL.
+      4. Untuk record dengan status 'approved', jalankan pipeline embed ke ChromaDB (icicos_faq).
+      5. Kembalikan ringkasan: jumlah record diimport, dilewati, dan di-embed.
+
+    Deduplication: jika kombinasi question + source_file sudah ada di database, record dilewati.
+    """
+    import datetime
+
+    # --- Baca dan parse JSON ---
+    content = await file.read()
+    await file.close()
+
+    try:
+        records = json.loads(content.decode("utf-8"))
+        if not isinstance(records, list):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="File JSON harus berisi sebuah list (array) dari objek FAQ.",
+            )
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File JSON tidak valid: {exc}",
+        )
+
+    imported_count = 0
+    skipped_count = 0
+    to_embed: List[Dict[str, Any]] = []
+
+    for record in records:
+        question = (record.get("question") or "").strip()
+        answer = (record.get("answer") or "").strip()
+        category = (record.get("category") or "lainnya").strip()
+        faq_status = (record.get("status") or "pending").strip()
+        source_file = (record.get("source_file") or "imported").strip()
+
+        # Lewati record dengan data tidak lengkap
+        if not question or not answer:
+            skipped_count += 1
+            continue
+
+        # Cek duplikasi: (question, source_file)
+        dup_result = await db.execute(
+            select(WhatsAppFAQ).where(
+                WhatsAppFAQ.question == question,
+                WhatsAppFAQ.source_file == source_file,
+            )
+        )
+        if dup_result.scalar_one_or_none() is not None:
+            skipped_count += 1
+            continue
+
+        # Sisipkan record baru
+        now = datetime.datetime.now(datetime.timezone.utc)
+        new_faq = WhatsAppFAQ(
+            question=question,
+            answer=answer,
+            category=category,
+            status=faq_status,
+            source_file=source_file,
+            approved_at=now if faq_status == "approved" else None,
+        )
+        db.add(new_faq)
+        await db.flush()  # Dapatkan ID sebelum commit
+
+        if faq_status == "approved":
+            to_embed.append({
+                "id": new_faq.id,
+                "question": question,
+                "answer": answer,
+                "category": category,
+                "source_file": source_file,
+            })
+
+        imported_count += 1
+
+    await db.commit()
+    logger.info(f"[Import FAQ JSON] Selesai: {imported_count} diimport, {skipped_count} dilewati.")
+
+    # --- Embed record 'approved' ke ChromaDB ---
+    embedded_count = 0
+    if to_embed:
+        try:
+            def sync_embed_imported(items: List[Dict[str, Any]]):
+                from langchain_chroma import Chroma
+                from langchain_core.documents import Document as LCDocument
+                from backend.rag.ingestion import get_embeddings, CHROMA_PERSIST_DIR
+
+                docs = [
+                    LCDocument(
+                        page_content=f"Pertanyaan: {item['question']}\nJawaban: {item['answer']}",
+                        metadata={
+                            "source": item["source_file"],
+                            "faq_id": item["id"],
+                            "type": "whatsapp_faq",
+                            "category": item["category"],
+                            "ingestion_method": "json_import",
+                        },
+                    )
+                    for item in items
+                ]
+                embeddings = get_embeddings()
+                Chroma.from_documents(
+                    documents=docs,
+                    embedding=embeddings,
+                    persist_directory=CHROMA_PERSIST_DIR,
+                    collection_name="icicos_faq",
+                )
+
+            logger.info(f"[Import FAQ JSON] Memulai embed {len(to_embed)} approved FAQ ke ChromaDB...")
+            await asyncio.to_thread(sync_embed_imported, to_embed)
+            embedded_count = len(to_embed)
+            logger.info(f"[Import FAQ JSON] Embed selesai: {embedded_count} FAQ.")
+        except Exception as embed_exc:
+            logger.error(f"[Import FAQ JSON] Gagal embed ke ChromaDB: {embed_exc}", exc_info=True)
+            return {
+                "status": "partial",
+                "message": (
+                    f"{imported_count} FAQ berhasil diimport ke database, "
+                    f"namun embed {len(to_embed)} approved FAQ ke ChromaDB gagal: {embed_exc}"
+                ),
+                "imported": imported_count,
+                "skipped": skipped_count,
+                "embedded": 0,
+            }
+
+    return {
+        "status": "success",
+        "message": (
+            f"Berhasil mengimport {imported_count} FAQ ({skipped_count} dilewati karena duplikasi). "
+            f"{embedded_count} approved FAQ di-embed ke database RAG."
+        ),
+        "imported": imported_count,
+        "skipped": skipped_count,
+        "embedded": embedded_count,
+    }
+
+
 
 @router.delete(
     "/whatsapp/pending/{faq_id}",

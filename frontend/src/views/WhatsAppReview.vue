@@ -12,7 +12,9 @@ import {
   deletePendingFAQ,
   approveSingleFAQ,
   approveAllFAQs,
-  exportFaqs
+  exportFaqs,
+  exportFaqsJson,
+  importFaqsJson,
 } from '@/services/api'
 
 // --- State ---
@@ -20,6 +22,7 @@ const faqs = ref([])
 const isFetching = ref(false)
 const fetchError = ref(null)
 const isExporting = ref(false)
+const isImporting = ref(false)
 
 const isDragging = ref(false)
 const isUploading = ref(false)
@@ -291,6 +294,52 @@ async function handleExport(status) {
     isExporting.value = false
   }
 }
+
+async function handleExportJson() {
+  isExporting.value = true
+  try {
+    const response = await exportFaqsJson()
+    const url = window.URL.createObjectURL(new Blob([response.data], { type: 'application/json' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.setAttribute('download', 'faq_database_export.json')
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.URL.revokeObjectURL(url)
+  } catch (err) {
+    console.error('[WhatsAppReview] Failed to export JSON:', err)
+    alert('Failed to export FAQ database as JSON.')
+  } finally {
+    isExporting.value = false
+  }
+}
+
+async function handleImportJson(event) {
+  const file = event.target.files[0]
+  event.target.value = '' // Reset input agar file yang sama bisa diupload lagi
+  if (!file) return
+
+  if (!file.name.endsWith('.json')) {
+    alert('Hanya file .json yang diterima.')
+    return
+  }
+
+  isImporting.value = true
+  successMsg.value = null
+  uploadError.value = null
+  try {
+    const { data } = await importFaqsJson(file)
+    successMsg.value = data?.message ?? 'Import berhasil.'
+    // Refresh daftar pending agar FAQ yang baru muncul
+    await fetchPending()
+  } catch (err) {
+    console.error('[WhatsAppReview] Failed to import JSON:', err)
+    uploadError.value = err.response?.data?.detail ?? err.message ?? 'Gagal mengimport file JSON.'
+  } finally {
+    isImporting.value = false
+  }
+}
 </script>
 
 <template>
@@ -324,6 +373,36 @@ async function handleExport(status) {
             <button @click="handleExport('approved')" class="w-full text-left px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50 hover:text-indigo-600">Export Accepted</button>
           </div>
         </div>
+
+        <!-- Export DB JSON -->
+        <button
+          @click="handleExportJson"
+          :disabled="isExporting || isImporting"
+          class="text-xs text-emerald-600 hover:text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 disabled:opacity-50 font-medium"
+          title="Download seluruh database FAQ sebagai file JSON"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5"><path fill-rule="evenodd" d="M10 3a.75.75 0 0 1 .75.75v10.638l3.96-4.158a.75.75 0 1 1 1.08 1.04l-5.25 5.5a.75.75 0 0 1-1.08 0l-5.25-5.5a.75.75 0 1 1 1.08-1.04l3.96 4.158V3.75A.75.75 0 0 1 10 3Z" clip-rule="evenodd" /></svg>
+          Export DB
+        </button>
+
+        <!-- Import DB JSON (hidden file input) -->
+        <input
+          ref="importJsonInput"
+          type="file"
+          accept=".json"
+          class="hidden"
+          @change="handleImportJson"
+        />
+        <button
+          @click="$refs.importJsonInput.click()"
+          :disabled="isImporting || isExporting"
+          class="text-xs text-indigo-600 hover:text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 disabled:opacity-50 font-medium"
+          title="Import file JSON ke database FAQ + embed approved ke RAG"
+        >
+          <svg v-if="isImporting" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5 animate-spin"><path fill-rule="evenodd" d="M15.312 11.424a5.5 5.5 0 0 1-9.201 2.466l-.312-.311h2.433a.75.75 0 0 0 0-1.5H3.989a.75.75 0 0 0-.75.75v4.242a.75.75 0 0 0 1.5 0v-2.43l.31.31a7 7 0 0 0 11.712-3.138.75.75 0 0 0-1.449-.39Zm1.23-3.723a.75.75 0 0 0 .219-.53V2.929a.75.75 0 0 0-1.5 0V5.36l-.31-.31A7 7 0 0 0 3.239 8.188a.75.75 0 1 0 1.448.389A5.5 5.5 0 0 1 13.89 6.11l.311.31h-2.432a.75.75 0 0 0 0 1.5h4.243a.75.75 0 0 0 .53-.219Z" clip-rule="evenodd" /></svg>
+          <svg v-else xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5"><path fill-rule="evenodd" d="M10 17a.75.75 0 0 1-.75-.75V5.612L5.29 9.77a.75.75 0 0 1-1.08-1.04l5.25-5.5a.75.75 0 0 1 1.08 0l5.25 5.5a.75.75 0 1 1-1.08 1.04l-3.96-4.158V16.25A.75.75 0 0 1 10 17Z" clip-rule="evenodd" /></svg>
+          {{ isImporting ? 'Importing…' : 'Import DB' }}
+        </button>
 
         <button
           v-if="isPolling"

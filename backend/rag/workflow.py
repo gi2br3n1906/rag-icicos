@@ -286,7 +286,14 @@ async def node_verify(state: AgentState) -> AgentState:
     """
     Node 4: CRAG Verifier (Penjaga Gawang Terakhir).
     Mengevaluasi jawaban yang dihasilkan sebelum dikirim ke user.
-    Jika gagal → jawaban diganti dengan FALLBACK_RESPONSE.
+
+    Logika Self-Healing:
+      Jika jawaban SOP primer gagal verifikasi DAN state memiliki has_both=True
+      (artinya FAQ database juga punya dokumen relevan), maka:
+        1. Generate jawaban dari faq_docs.
+        2. Verifikasi jawaban FAQ terhadap konteks FAQ.
+        3. Jika lulus → kirim jawaban FAQ, set has_both=False (tombol FAQ tidak double).
+        4. Jika juga gagal → baru kembalikan FALLBACK_RESPONSE.
     """
     logger.info("[Workflow] ► Node: verify")
 
@@ -298,10 +305,52 @@ async def node_verify(state: AgentState) -> AgentState:
     )
 
     if not is_valid:
-        logger.warning("[Workflow] Verifikasi GAGAL. Mengganti jawaban dengan fallback.")
+        # --- Self-Healing: Coba fallback ke FAQ jika tersedia ---
+        has_both = state.get("has_both", False)
+        faq_docs = state.get("faq_docs", [])
+
+        if has_both and faq_docs:
+            logger.info(
+                "[Workflow] Verifikasi SOP GAGAL. Self-healing: mencoba generate jawaban dari FAQ..."
+            )
+            faq_answer, faq_follow_ups = await asyncio.to_thread(
+                generate_faq_answer, state["rewritten_query"], faq_docs
+            )
+
+            # Bangun konteks FAQ untuk verifier
+            faq_context_str = "\n\n---\n\n".join(d.page_content for d in faq_docs)
+
+            faq_is_valid = await asyncio.to_thread(
+                verify_answer,
+                state["rewritten_query"],
+                faq_context_str,
+                faq_answer,
+            )
+
+            if faq_is_valid:
+                logger.info(
+                    "[Workflow] Self-healing berhasil: jawaban FAQ lulus verifikasi. "
+                    "Mengganti jawaban SOP dengan jawaban FAQ."
+                )
+                return {
+                    **state,
+                    "answer": faq_answer,
+                    "recommended_questions": faq_follow_ups,
+                    "has_both": False,      # Jawaban FAQ sudah jadi jawaban utama; sembunyikan tombol FAQ
+                    "intent": "FAQ",
+                }
+            else:
+                logger.warning(
+                    "[Workflow] Self-healing GAGAL: jawaban FAQ juga tidak lulus verifikasi. "
+                    "Mengembalikan FALLBACK_RESPONSE."
+                )
+        else:
+            logger.warning("[Workflow] Verifikasi GAGAL. Mengganti jawaban dengan fallback.")
+
         return {**state, "answer": FALLBACK_RESPONSE}
 
     return state
+
 
 
 async def node_fallback(state: AgentState) -> AgentState:

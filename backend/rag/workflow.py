@@ -226,28 +226,71 @@ async def node_generate_sop(state: AgentState) -> AgentState:
     Node 3a: SOP Generator.
     Menghasilkan jawaban dari primary SOP dan memvalidasi other_sops secara paralel.
 
-    Validasi other_sops: untuk setiap SOP kandidat, dokumen-nya diambil dan
-    query yang sama dikirimkan ke LLM. Jika LLM tidak menemukan jawaban (FALLBACK),
-    SOP tersebut dibuang dari other_sops sehingga tombol Explore tidak pernah
-    menampilkan SOP yang tidak bisa menjawab pertanyaan user.
+    Pre-generation binary check (NEW):
+      Sebelum memanggil LLM untuk menghasilkan jawaban dari SOP primer, sistem
+      menjalankan binary classifier (check_sop_answers_query) terlebih dahulu.
+
+      - Jika SOP primer TIDAK relevan (classifier: NO) DAN has_both=True:
+          → Pivot langsung ke FAQ generation. Tidak ada LLM call SOP yang sia-sia.
+          → has_both di-set False agar tombol "Show FAQ" tidak double.
+      - Jika SOP primer TIDAK relevan (classifier: NO) DAN has_both=False:
+          → Langsung return FALLBACK_RESPONSE tanpa memanggil LLM sama sekali.
+      - Jika SOP primer RELEVAN (classifier: YES):
+          → Generate jawaban SOP + validasi other_sops secara paralel seperti biasa.
+
+    Tujuan: mencegah verifier menyetujui jawaban SOP "tidak ditemukan" yang jujur
+    tapi tidak berguna, yang akhirnya memblokir jawaban FAQ yang lebih relevan.
     """
     logger.info("[Workflow] ► Node: generate_sop")
     sop_doc = state.get("sop_doc")
     query = state["rewritten_query"]
     other_sops_candidates = state.get("other_sops", [])
+    has_both = state.get("has_both", False)
+    faq_docs = state.get("faq_docs", [])
 
     if not sop_doc:
         logger.warning("[Workflow] generate_sop dipanggil tanpa sop_doc. Trigger fallback.")
         return {**state, "answer": FALLBACK_RESPONSE, "recommended_questions": [], "other_sops": []}
 
-    # Jalankan primary answer generation + other_sops validation secara paralel
+    # --- Pre-generation binary check pada SOP primer ---
+    primary_is_relevant = await asyncio.to_thread(check_sop_answers_query, query, sop_doc)
+
+    if not primary_is_relevant:
+        sop_name = sop_doc.metadata.get("source", "primary SOP")
+        if has_both and faq_docs:
+            # Pivot ke FAQ: SOP primer tidak relevan, tapi FAQ punya jawabannya
+            logger.info(
+                f"[Workflow] Primary SOP '{sop_name}' TIDAK relevan (binary: NO) & has_both=True. "
+                "Pivot ke FAQ generation."
+            )
+            faq_answer, faq_follow_ups = await asyncio.to_thread(
+                generate_faq_answer, query, faq_docs
+            )
+            faq_context_str = "\n\n---\n\n".join(d.page_content for d in faq_docs)
+            return {
+                **state,
+                "answer": faq_answer,
+                "recommended_questions": faq_follow_ups,
+                "other_sops": [],
+                "has_both": False,      # Jawaban FAQ sudah jadi utama; jangan tampilkan tombol FAQ lagi
+                "intent": "FAQ",
+                "context_str": faq_context_str,
+            }
+        else:
+            # Tidak ada alternatif — langsung fallback tanpa LLM call
+            logger.info(
+                f"[Workflow] Primary SOP '{sop_name}' TIDAK relevan (binary: NO) & has_both=False. "
+                "Return FALLBACK tanpa LLM call."
+            )
+            return {**state, "answer": FALLBACK_RESPONSE, "recommended_questions": [], "other_sops": []}
+
+    # --- SOP relevan: generate jawaban + validasi other_sops secara paralel ---
     tasks = [asyncio.to_thread(generate_sop_answer, query, sop_doc)]
     for sop_info in other_sops_candidates:
         tasks.append(_validate_other_sop(query, sop_info))
 
     results = await asyncio.gather(*tasks)
 
-    # Pisahkan hasil
     answer, follow_ups = results[0]
     validated_sops = [r for r in results[1:] if r is not None]
 
@@ -259,6 +302,7 @@ async def node_generate_sop(state: AgentState) -> AgentState:
 
     logger.info(f"[Workflow] SOP answer generated. Follow-ups: {follow_ups}")
     return {**state, "answer": answer, "recommended_questions": follow_ups, "other_sops": validated_sops}
+
 
 
 async def node_generate_faq(state: AgentState) -> AgentState:

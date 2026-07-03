@@ -66,7 +66,7 @@ RETRIEVAL_THRESHOLD = 0.4
 # ---------------------------------------------------------------------------
 GREETING_RESPONSE = (
     "Hello! 👋 I am the <b>Official Assistant of ICICoS 2026</b>.\n\n"
-    "I am here to guide you through the official procedures and answer FAQs for "
+    "I am here to guide you through the official Standard Operating Procedures (SOP) for "
     "the 9th International Conference on Informatics and Computational Sciences (ICICoS 2026).\n\n"
     "You can ask me about:\n"
     "• <b>Paper Submission Guidelines</b> (format, template, IEEE PDF eXpress, etc.)\n"
@@ -196,14 +196,13 @@ async def node_route(state: AgentState) -> AgentState:
 
     threshold = 0.3 if state.get("is_recommendation") else RETRIEVAL_THRESHOLD
 
-    # Jalankan retrieval SOP dan FAQ secara paralel
-    (sop_doc, score_sop, other_sops), (faq_docs, score_faq) = await asyncio.gather(
-        asyncio.to_thread(retrieve_sop, query, threshold),
-        asyncio.to_thread(retrieve_faq, query, threshold),
-    )
+    # Jalankan hanya retrieval SOP (FAQ dinonaktifkan sementara atas permintaan panitia)
+    sop_doc, score_sop, other_sops = await asyncio.to_thread(retrieve_sop, query, threshold)
+    faq_docs, score_faq = [], 0.0
 
     sop_available = sop_doc is not None and score_sop >= threshold
-    faq_available = len(faq_docs) > 0 and score_faq >= threshold
+    faq_available = False
+
 
     # Tentukan intent dan has_both secara deterministik
     if sop_available and faq_available:

@@ -372,3 +372,80 @@ sudo systemctl restart nginx
 # Inspect Nginx Error Logs
 sudo tail -f /var/log/nginx/error.log
 ```
+
+---
+
+## 10. Public Exposure via Cloudflare Tunnel (Optional/Intranet VPS)
+
+Jika VPS Anda diletakkan di dalam **intranet kampus (seperti LAN Universitas Diponegoro)** yang berada di belakang NAT/Firewall dan **tidak memiliki IP Publik**, Anda tidak bisa menggunakan Certbot biasa karena port 80/443 tidak bisa diakses dari luar.
+
+Solusi terbaik adalah menggunakan **Cloudflare Tunnel (`cloudflared`)**. Tunnels bekerja dengan membuat koneksi keluar (*outbound*) yang aman dari VPS ke jaringan Cloudflare, sehingga Anda **tidak perlu membuka port masuk** (*inbound*) apa pun pada firewall kampus.
+
+### Keuntungan:
+* Tidak butuh IP Publik atau konfigurasi Port Forwarding di router kampus.
+* Otomatis mendapatkan SSL/HTTPS gratis dari Cloudflare (tidak perlu Certbot di host).
+* Melindungi server asli dari serangan DDoS secara langsung.
+
+---
+
+### Langkah A: Install `cloudflared` pada Debian 12
+
+Jalankan perintah berikut di terminal VPS untuk memasang repositori resmi Cloudflare dan mendownload package-nya:
+
+```bash
+# Buat direktori keyring jika belum ada
+sudo mkdir -p --mode=0755 /usr/share/keyrings
+
+# Unduh GPG Key Cloudflare
+curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+
+# Daftarkan repositori cloudflared (Debian Bookworm)
+echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared bookworm main' | sudo tee /etc/apt/sources.list.d/cloudflared.list
+
+# Update package list & install
+sudo apt update
+sudo apt install cloudflared -y
+```
+
+---
+
+### Langkah B: Buat Tunnel di Cloudflare Dashboard (Dashboard-Managed)
+
+Metode ini adalah yang termudah karena semua konfigurasi routing dan domain dikelola langsung dari web browser:
+
+1. Masuk ke **[Cloudflare Zero Trust Dashboard](https://one.dash.cloudflare.com/)**.
+2. Pilih menu **Networks** -> **Tunnels** di sidebar kiri.
+3. Klik tombol **Create a Tunnel**.
+4. Pilih **Cloudflare** (Connector) -> klik **Next**.
+5. Beri nama tunnel Anda (misalnya: `icicos-vps-undip`) -> klik **Save tunnel**.
+6. Cloudflare akan menampilkan beberapa tab perintah instalasi. Pilih tab **Debian (amd64)**.
+7. Di bagian bawah, Anda akan melihat baris perintah dengan **token** unik. Salin perintah tersebut, misalnya:
+   ```bash
+   sudo cloudflared service install eyJhIjoiY2... (token Anda)
+   ```
+8. **Paste dan jalankan perintah tersebut di terminal VPS Anda**. Perintah ini otomatis mendaftarkan dan menjalankan `cloudflared` sebagai system service di Linux yang akan menyala otomatis jika VPS reboot.
+9. Kembali ke browser. Status di Cloudflare Dashboard akan berubah menjadi **Active** (Connected) -> klik **Next**.
+
+---
+
+### Langkah C: Konfigurasikan Routing Domain (Public Hostname)
+
+Sekarang, hubungkan domain Anda ke web server Nginx lokal di dalam VPS:
+
+1. Di tab **Public Hostname**, klik **Add a public hostname**.
+2. Isi kolom domain yang Anda miliki di Cloudflare:
+   * **Subdomain**: `icicos` (atau kosongkan jika ingin domain utama)
+   * **Domain**: `domainanda.com`
+   * **Path**: (kosongkan)
+3. Di kolom **Service** (tujuan lokal di dalam VPS):
+   * **Type**: `HTTP`
+   * **URL**: `localhost:80` (karena Nginx kita berjalan di port 80 host)
+4. Klik **Save hostname**.
+
+---
+
+### Langkah D: Verifikasi Koneksi
+* Buka domain Anda (misalnya `https://icicos.domainanda.com`) dari HP atau komputer luar.
+* Cloudflare akan otomatis mengamankan koneksi dengan HTTPS (SSL) dan meneruskan lalu lintasnya secara aman lewat tunnel menuju Nginx port 80 di dalam VPS lokal Anda.
+* Uji coba login ke Admin Dashboard dan kirim chat ke bot Telegram untuk memastikan semua komponen berjalan lancar!
+

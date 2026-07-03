@@ -406,12 +406,18 @@ async def node_verify(state: AgentState) -> AgentState:
     """
     logger.info("[Workflow] ► Node: verify")
 
+    # Jika jawaban adalah fallback, lewati verifikasi (menghindari kegagalan verifikasi akibat kontak eksternal di fallback)
+    if state["answer"] == FALLBACK_RESPONSE or state.get("intent") == "OTHER":
+        logger.info("[Workflow] Bypassing verification for fallback or off-topic answer.")
+        return state
+
     is_valid = await asyncio.to_thread(
         verify_answer,
         state["rewritten_query"],
         state.get("context_str", ""),
         state["answer"],
     )
+
 
     if not is_valid:
         # --- Self-Healing: Coba fallback ke FAQ jika tersedia ---

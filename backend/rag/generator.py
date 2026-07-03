@@ -196,19 +196,20 @@ def _parse_answer_and_followups(raw_output: str) -> Tuple[str, List[str]]:
 
 # Prompt khusus untuk validasi other_sops — TIDAK menghasilkan jawaban,
 # hanya mengklasifikasikan apakah dokumen punya info untuk menjawab query.
-_SOP_RELEVANCE_CHECK_PROMPT = """You are a relevance classifier. Your ONLY job is to determine whether the document below contains specific, substantial information that directly answers the user's question.
+_SOP_RELEVANCE_CHECK_PROMPT = """You are a relevance classifier. Your job is to determine whether the document below contains specific guidelines, instructions, rules, or links related to the user's question.
 
 Rules:
-- Answer YES only if the document has clear, actionable content about the user's question.
-- Answer NO if the document does not cover the topic, mentions it only tangentially, or only says it doesn't have that information.
-- Answer with exactly one word: YES or NO. Nothing else.
+1. Answer YES if the document contains actionable procedures, links, guidelines, or rules about the tool/website/topic asked in the query (e.g., if the user asks "What is IEEE PDF eXpress" and the document instructs how/where to use IEEE PDF eXpress or mentions its guidelines, answer YES).
+2. Answer YES if the user's question directly relates to any process, document requirements, or schedules described in the document.
+3. Answer NO ONLY if the document is completely unrelated to the topic, does not mention it at all, or only mentions it tangentially without any useful context.
+4. Output EXACTLY one word: YES or NO.
 
 User's question: "{question}"
 
 Document:
 {context}
 
-Does this document contain specific information to answer the question above?"""
+Does this document contain relevant information or instructions to help answer the question above?"""
 
 
 def check_sop_answers_query(query: str, sop_doc: Document) -> bool:

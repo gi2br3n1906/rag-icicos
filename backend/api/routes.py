@@ -442,6 +442,15 @@ class FAQUpdateSchema(BaseModel):
     category: Optional[str] = None
 
 
+class FAQCreateSchema(BaseModel):
+    question: str
+    answer: str
+    category: Optional[str] = "lainnya"
+    status: Optional[str] = "approved"
+
+
+
+
 # ---------------------------------------------------------------------------
 # Endpoint 6: POST /api/whatsapp/upload
 # ---------------------------------------------------------------------------
@@ -555,7 +564,7 @@ async def get_pending_faqs(
 
 @router.put(
     "/whatsapp/pending/{faq_id}",
-    summary="Edit Data FAQ Pending",
+    summary="Edit Data FAQ (Pending / Approved)",
     response_description="Data FAQ hasil perbaruan",
 )
 async def update_pending_faq(
@@ -564,7 +573,10 @@ async def update_pending_faq(
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     """
-    Mengubah konten (pertanyaan, jawaban, atau kategori) dari item FAQ pending.
+    Mengubah konten (pertanyaan, jawaban, atau kategori) dari item FAQ.
+    
+    Jika FAQ tersebut sudah berstatus 'approved', maka kita juga melakukan
+    update (re-embed) ke ChromaDB agar perubahan langsung berefek pada RAG.
     """
     result = await db.execute(
         select(WhatsAppFAQ).where(WhatsAppFAQ.id == faq_id)
@@ -576,10 +588,64 @@ async def update_pending_faq(
             detail=f"FAQ dengan ID {faq_id} tidak ditemukan.",
         )
 
+    old_status = faq.status
     faq.question = payload.question.strip()
     faq.answer = payload.answer.strip()
     if payload.category:
         faq.category = payload.category.strip()
+
+    # Jika sudah disetujui, update index vector-nya di ChromaDB
+    if old_status == "approved":
+        try:
+            def sync_update_faq_chroma(fid: int, q: str, a: str, src: str, cat: str):
+                from langchain_chroma import Chroma
+                from langchain_core.documents import Document
+                from backend.rag.ingestion import get_embeddings, CHROMA_PERSIST_DIR
+                
+                embeddings = get_embeddings()
+                vector_store = Chroma(
+                    persist_directory=CHROMA_PERSIST_DIR,
+                    embedding_function=embeddings,
+                    collection_name="icicos_faq",
+                )
+                # 1. Hapus embedding lama
+                vector_store.delete(where={"faq_id": fid})
+                
+                # 2. Sisipkan embedding baru
+                content = f"Pertanyaan: {q}\nJawaban: {a}"
+                doc = Document(
+                    page_content=content,
+                    metadata={
+                        "source": src,
+                        "faq_id": fid,
+                        "type": "whatsapp_faq",
+                        "category": cat,
+                        "ingestion_method": "manual_edit"
+                    }
+                )
+                Chroma.from_documents(
+                    documents=[doc],
+                    embedding=embeddings,
+                    persist_directory=CHROMA_PERSIST_DIR,
+                    collection_name="icicos_faq"
+                )
+
+            logger.info(f"[Update FAQ] Melakukan re-embed untuk FAQ ID={faq_id} di ChromaDB...")
+            await asyncio.to_thread(
+                sync_update_faq_chroma,
+                faq.id,
+                faq.question,
+                faq.answer,
+                faq.source_file,
+                faq.category
+            )
+            logger.info(f"[Update FAQ] Re-embed FAQ ID={faq_id} sukses.")
+        except Exception as chroma_exc:
+            logger.error(f"[Update FAQ] Gagal mengupdate ChromaDB untuk FAQ ID={faq_id}: {chroma_exc}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Gagal memperbarui RAG vector store: {str(chroma_exc)}"
+            )
 
     await db.commit()
     await db.refresh(faq)
@@ -592,12 +658,161 @@ async def update_pending_faq(
             "question": faq.question,
             "answer": faq.answer,
             "category": faq.category,
+            "status": faq.status,
         },
     }
 
 
+
 # ---------------------------------------------------------------------------
-# Endpoint 8b: GET /api/whatsapp/export
+# Endpoint 8b: GET /api/whatsapp/faqs
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/whatsapp/faqs",
+    summary="Daftar FAQ (Filter by Status)",
+    response_description="List Q&A WhatsApp berdasarkan filter status",
+)
+async def list_faqs(
+    status_filter: str = Query("all", description="Filter status: 'all', 'pending', atau 'approved'"),
+    db: AsyncSession = Depends(get_db),
+) -> List[Dict[str, Any]]:
+    """
+    Mengambil daftar FAQ dengan filter status tertentu, diurutkan terbaru (DESC).
+    """
+    stmt = select(WhatsAppFAQ)
+    if status_filter.lower() != "all":
+        stmt = stmt.where(WhatsAppFAQ.status == status_filter.lower())
+    
+    stmt = stmt.order_by(WhatsAppFAQ.created_at.desc())
+    result = await db.execute(stmt)
+    faqs = result.scalars().all()
+
+    return [
+        {
+            "id": faq.id,
+            "question": faq.question,
+            "answer": faq.answer,
+            "category": faq.category,
+            "status": faq.status,
+            "source_file": faq.source_file,
+            "created_at": faq.created_at.isoformat() if faq.created_at else None,
+            "approved_at": faq.approved_at.isoformat() if faq.approved_at else None,
+        }
+        for faq in faqs
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Endpoint 8c: POST /api/whatsapp/faqs
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/whatsapp/faqs",
+    status_code=status.HTTP_201_CREATED,
+    summary="Tambah FAQ Baru secara Manual",
+    response_description="Data FAQ baru hasil pembuatan",
+)
+async def create_manual_faq(
+    payload: FAQCreateSchema,
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """
+    Menambahkan data FAQ baru secara manual langsung lewat form dashboard.
+    
+    Jika status 'approved' (default), maka FAQ langsung di-embed ke ChromaDB.
+    """
+    import datetime
+
+    # Cek duplikasi
+    question = payload.question.strip()
+    dup_result = await db.execute(
+        select(WhatsAppFAQ).where(WhatsAppFAQ.question == question)
+    )
+    if dup_result.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="FAQ dengan pertanyaan serupa sudah ada di database."
+        )
+
+    faq_status = payload.status.lower() if payload.status else "approved"
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    new_faq = WhatsAppFAQ(
+        question=question,
+        answer=payload.answer.strip(),
+        category=payload.category.strip() if payload.category else "lainnya",
+        status=faq_status,
+        source_file="manual_entry",
+        approved_at=now if faq_status == "approved" else None
+    )
+
+    db.add(new_faq)
+    await db.flush()  # dapatkan id untuk embedding
+
+    # Jika statusnya approved, langsung masukkan ke RAG (Chroma)
+    if faq_status == "approved":
+        try:
+            def sync_embed_manual(fid: int, q: str, a: str, cat: str):
+                from langchain_chroma import Chroma
+                from langchain_core.documents import Document
+                from backend.rag.ingestion import get_embeddings, CHROMA_PERSIST_DIR
+                
+                content = f"Pertanyaan: {q}\nJawaban: {a}"
+                doc = Document(
+                    page_content=content,
+                    metadata={
+                        "source": "manual_entry",
+                        "faq_id": fid,
+                        "type": "whatsapp_faq",
+                        "category": cat,
+                        "ingestion_method": "manual_creation"
+                    }
+                )
+                embeddings = get_embeddings()
+                Chroma.from_documents(
+                    documents=[doc],
+                    embedding=embeddings,
+                    persist_directory=CHROMA_PERSIST_DIR,
+                    collection_name="icicos_faq"
+                )
+
+            logger.info(f"[Create FAQ] Memulai embedding FAQ manual ID={new_faq.id}...")
+            await asyncio.to_thread(
+                sync_embed_manual,
+                new_faq.id,
+                new_faq.question,
+                new_faq.answer,
+                new_faq.category
+            )
+            logger.info(f"[Create FAQ] FAQ manual ID={new_faq.id} sukses di-embed.")
+        except Exception as chroma_exc:
+            logger.error(f"[Create FAQ] Gagal embed ke ChromaDB: {chroma_exc}", exc_info=True)
+            # Rollback insert jika embed gagal agar data konsisten
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Gagal meng-ingest FAQ ke RAG: {str(chroma_exc)}"
+            )
+
+    await db.commit()
+    await db.refresh(new_faq)
+
+    return {
+        "status": "success",
+        "message": "FAQ manual berhasil dibuat.",
+        "faq": {
+            "id": new_faq.id,
+            "question": new_faq.question,
+            "answer": new_faq.answer,
+            "category": new_faq.category,
+            "status": new_faq.status,
+        }
+    }
+
+
+# ---------------------------------------------------------------------------
+# Endpoint 8d: GET /api/whatsapp/export
 # ---------------------------------------------------------------------------
 
 @router.get(

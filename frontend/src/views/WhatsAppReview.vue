@@ -15,6 +15,8 @@ import {
   exportFaqs,
   exportFaqsJson,
   importFaqsJson,
+  getFaqs,
+  createFaq,
 } from '@/services/api'
 
 // --- State ---
@@ -23,6 +25,14 @@ const isFetching = ref(false)
 const fetchError = ref(null)
 const isExporting = ref(false)
 const isImporting = ref(false)
+
+const activeTab = ref('pending') // 'pending' | 'approved'
+const pendingCount = ref(0)
+const approvedCount = ref(0)
+
+const showAddForm = ref(false)
+const newFaqForm = ref({ question: '', answer: '', category: 'lainnya', status: 'approved' })
+const isSavingNew = ref(false)
 
 const isDragging = ref(false)
 const isUploading = ref(false)
@@ -56,19 +66,35 @@ function getCategoryLabel(val) {
   return categories.find(c => c.value === val)?.label ?? val
 }
 
-// --- Fetch Pending FAQs ---
-async function fetchPending() {
+// --- Fetch FAQs based on Active Tab ---
+async function fetchFaqs() {
   isFetching.value = true
   fetchError.value = null
   try {
-    const { data } = await getPendingFAQs()
+    const { data } = await getFaqs(activeTab.value)
     faqs.value = Array.isArray(data) ? data : (data?.data ?? [])
+
+    // Refresh counts for both tabs
+    const [pRes, aRes] = await Promise.all([
+      getFaqs('pending'),
+      getFaqs('approved')
+    ])
+    pendingCount.value = pRes.data?.length ?? 0
+    approvedCount.value = aRes.data?.length ?? 0
   } catch (err) {
-    console.error('[WhatsAppReview] Failed to fetch pending list:', err)
-    fetchError.value = err.response?.data?.detail ?? err.message ?? 'Failed to load pending FAQ list.'
+    console.error('[WhatsAppReview] Failed to fetch FAQ list:', err)
+    fetchError.value = err.response?.data?.detail ?? err.message ?? 'Failed to load FAQ list.'
   } finally {
     isFetching.value = false
   }
+}
+
+// --- Change Tab ---
+function setTab(tab) {
+  if (activeTab.value === tab) return
+  activeTab.value = tab
+  editingId.value = null
+  fetchFaqs()
 }
 
 // --- Polling logic ---
@@ -77,11 +103,17 @@ function startPolling() {
   isPolling.value = true
   pollInterval = setInterval(async () => {
     try {
-      const { data } = await getPendingFAQs()
+      const { data } = await getFaqs(activeTab.value)
       const newFaqs = Array.isArray(data) ? data : (data?.data ?? [])
-      
-      // Update state
       faqs.value = newFaqs
+      
+      // Update counts
+      const [pRes, aRes] = await Promise.all([
+        getFaqs('pending'),
+        getFaqs('approved')
+      ])
+      pendingCount.value = pRes.data?.length ?? 0
+      approvedCount.value = aRes.data?.length ?? 0
     } catch (err) {
       console.error('[WhatsAppReview] Polling error:', err)
     }
@@ -97,12 +129,13 @@ function stopPolling() {
 }
 
 onMounted(() => {
-  fetchPending()
+  fetchFaqs()
 })
 
 onUnmounted(() => {
   stopPolling()
 })
+
 
 // --- Drag & Drop ---
 function onDragEnter(e) {
@@ -186,9 +219,10 @@ async function handleUpload(filesList) {
       stopPolling()
     }, 300000)
 
-    // Muat data pending segera
-    await fetchPending()
+    // Muat data segera
+    await fetchFaqs()
   }
+
 
   isUploading.value = false
 }
@@ -247,18 +281,28 @@ async function approveFaq(id) {
 }
 
 async function rejectFaq(id) {
-  if (!confirm('Reject and permanently delete this pending FAQ from the system?')) return
+  const confirmMsg = activeTab.value === 'approved'
+    ? 'Delete this approved FAQ permanently from PostgreSQL and ChromaDB?'
+    : 'Reject and permanently delete this pending FAQ from the system?'
+
+  if (!confirm(confirmMsg)) return
   processingId.value = id
   try {
     await deletePendingFAQ(id)
     faqs.value = faqs.value.filter(f => f.id !== id)
+    if (activeTab.value === 'approved') {
+      approvedCount.value = Math.max(0, approvedCount.value - 1)
+    } else {
+      pendingCount.value = Math.max(0, pendingCount.value - 1)
+    }
   } catch (err) {
-    console.error('[WhatsAppReview] Failed to reject FAQ:', err)
-    alert(err.response?.data?.detail ?? 'Failed to reject FAQ.')
+    console.error('[WhatsAppReview] Failed to delete FAQ:', err)
+    alert(err.response?.data?.detail ?? 'Failed to delete FAQ.')
   } finally {
     processingId.value = null
   }
 }
+
 
 async function approveAll() {
   if (!confirm(`Approve all ${faqs.value.length} pending FAQ(s) in bulk and ingest into RAG?`)) return
@@ -331,8 +375,8 @@ async function handleImportJson(event) {
   try {
     const { data } = await importFaqsJson(file)
     successMsg.value = data?.message ?? 'Import berhasil.'
-    // Refresh daftar pending agar FAQ yang baru muncul
-    await fetchPending()
+    // Refresh daftar agar FAQ yang baru muncul
+    await fetchFaqs()
   } catch (err) {
     console.error('[WhatsAppReview] Failed to import JSON:', err)
     uploadError.value = err.response?.data?.detail ?? err.message ?? 'Gagal mengimport file JSON.'
@@ -340,6 +384,39 @@ async function handleImportJson(event) {
     isImporting.value = false
   }
 }
+
+async function handleCreateFaq() {
+  if (!newFaqForm.value.question.trim() || !newFaqForm.value.answer.trim()) {
+    alert('Pertanyaan dan jawaban wajib diisi.')
+    return
+  }
+
+  isSavingNew.value = true
+  try {
+    await createFaq({
+      question: newFaqForm.value.question,
+      answer: newFaqForm.value.answer,
+      category: newFaqForm.value.category,
+      status: newFaqForm.value.status
+    })
+
+    successMsg.value = `FAQ manual berhasil dibuat dengan status '${newFaqForm.value.status}'.`
+    showAddForm.value = false
+    
+    // Reset form
+    newFaqForm.value = { question: '', answer: '', category: 'lainnya', status: 'approved' }
+
+    // Ganti tab sesuai status FAQ yang baru dibuat agar langsung terlihat
+    activeTab.value = newFaqForm.value.status
+    await fetchFaqs()
+  } catch (err) {
+    console.error('[WhatsAppReview] Failed to create manual FAQ:', err)
+    alert(err.response?.data?.detail ?? 'Gagal membuat FAQ manual.')
+  } finally {
+    isSavingNew.value = false
+  }
+}
+
 </script>
 
 <template>
@@ -572,31 +649,168 @@ async function handleImportJson(event) {
       </div>
     </div>
 
+    <!-- Tab Switcher & Add Manual FAQ Button -->
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-2">
+      <!-- Tabs -->
+      <div class="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
+        <button
+          @click="setTab('pending')"
+          :class="[
+            'px-4 py-2 text-xs font-semibold rounded-lg transition-all duration-200 flex items-center gap-1.5',
+            activeTab === 'pending'
+              ? 'bg-white text-indigo-600 shadow-sm'
+              : 'text-slate-500 hover:text-slate-800'
+          ]"
+        >
+          Pending Review
+          <span
+            :class="[
+              'inline-flex items-center justify-center px-1.5 py-0.5 rounded-full text-xxs font-bold',
+              activeTab === 'pending' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-200 text-slate-600'
+            ]"
+          >
+            {{ pendingCount }}
+          </span>
+        </button>
+        <button
+          @click="setTab('approved')"
+          :class="[
+            'px-4 py-2 text-xs font-semibold rounded-lg transition-all duration-200 flex items-center gap-1.5',
+            activeTab === 'approved'
+              ? 'bg-white text-indigo-600 shadow-sm'
+              : 'text-slate-500 hover:text-slate-800'
+          ]"
+        >
+          Active FAQs
+          <span
+            :class="[
+              'inline-flex items-center justify-center px-1.5 py-0.5 rounded-full text-xxs font-bold',
+              activeTab === 'approved' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-200 text-slate-600'
+            ]"
+          >
+            {{ approvedCount }}
+          </span>
+        </button>
+      </div>
+
+      <!-- Add Manual Button -->
+      <button
+        @click="showAddForm = !showAddForm"
+        class="inline-flex items-center gap-1.5 text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-4 py-2 rounded-xl transition duration-150 shadow-sm shadow-indigo-100"
+      >
+        <svg v-if="showAddForm" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4"><path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" /></svg>
+        <svg v-else xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4"><path d="M10.75 4.75a.75.75 0 0 0-1.5 0v4.5h-4.5a.75.75 0 0 0 0 1.5h4.5v4.5a.75.75 0 0 0 1.5 0v-4.5h4.5a.75.75 0 0 0 0-1.5h-4.5v-4.5Z" /></svg>
+        {{ showAddForm ? 'Tutup Form' : 'Tambah FAQ Manual' }}
+      </button>
+    </div>
+
+    <!-- ── Manual Add FAQ Form ── -->
+    <Transition name="slide-down">
+      <div v-if="showAddForm" class="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
+        <div class="flex items-center justify-between">
+          <h3 class="text-sm font-bold text-slate-800">Tambah FAQ Baru secara Manual</h3>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <!-- Category -->
+          <div class="space-y-1">
+            <label class="text-xs font-semibold text-slate-600">Kategori FAQ:</label>
+            <select
+              v-model="newFaqForm.category"
+              class="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-700 bg-white"
+            >
+              <option v-for="cat in categories" :key="cat.value" :value="cat.value">
+                {{ cat.label }}
+              </option>
+            </select>
+          </div>
+
+          <!-- Status -->
+          <div class="space-y-1">
+            <label class="text-xs font-semibold text-slate-600">Status Awal:</label>
+            <select
+              v-model="newFaqForm.status"
+              class="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-700 bg-white"
+            >
+              <option value="approved">Approved &amp; Embed RAG (Langsung Aktif)</option>
+              <option value="pending">Pending Review (Masuk Staging)</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Question -->
+        <div class="space-y-1">
+          <label class="text-xs font-semibold text-slate-600">Pertanyaan (dalam Bahasa Inggris):</label>
+          <input
+            v-model="newFaqForm.question"
+            type="text"
+            placeholder="e.g. How do I get my Letter of Acceptance?"
+            class="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-700 font-medium"
+          />
+        </div>
+
+        <!-- Answer -->
+        <div class="space-y-1">
+          <label class="text-xs font-semibold text-slate-600">Jawaban (dalam Bahasa Inggris):</label>
+          <textarea
+            v-model="newFaqForm.answer"
+            rows="3"
+            placeholder="e.g. You will receive the LoA via email after your camera-ready paper is accepted."
+            class="w-full text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-600 leading-relaxed"
+          ></textarea>
+        </div>
+
+        <!-- Save Button -->
+        <div class="flex justify-end gap-2 pt-2">
+          <button
+            @click="showAddForm = false"
+            class="text-xs font-semibold text-slate-500 hover:text-slate-700 px-4 py-2 rounded-lg transition"
+          >
+            Batal
+          </button>
+          <button
+            @click="handleCreateFaq"
+            :disabled="isSavingNew"
+            class="inline-flex items-center gap-1.5 text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-4 py-2 rounded-lg disabled:opacity-50 transition"
+          >
+            <svg v-if="isSavingNew" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5 animate-spin">
+              <path fill-rule="evenodd" d="M15.312 11.424a5.5 5.5 0 0 1-9.201 2.466l-.312-.311h2.433a.75.75 0 0 0 0-1.5H3.989a.75.75 0 0 0-.75.75v4.242a.75.75 0 0 0 1.5 0v-2.43l.31.31a7 7 0 0 0 11.712-3.138.75.75 0 0 0-1.449-.39Zm1.23-3.723a.75.75 0 0 0 .219-.53V2.929a.75.75 0 0 0-1.5 0V5.36l-.31-.31A7 7 0 0 0 3.239 8.188a.75.75 0 1 0 1.448.389A5.5 5.5 0 0 1 13.89 6.11l.311.31h-2.432a.75.75 0 0 0 0 1.5h4.243a.75.75 0 0 0 .53-.219Z" clip-rule="evenodd" />
+            </svg>
+            <span>Simpan FAQ</span>
+          </button>
+        </div>
+      </div>
+    </Transition>
+
     <!-- ── Staging Review List ── -->
     <div class="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
       <!-- Header List -->
       <div class="px-6 py-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/40">
         <div>
-          <h3 class="text-sm font-bold text-slate-800">Pending FAQ Review List</h3>
+          <h3 class="text-sm font-bold text-slate-800">
+            {{ activeTab === 'pending' ? 'Pending FAQ Review List' : 'Active Approved FAQs' }}
+          </h3>
           <p class="text-xs text-slate-400 mt-0.5">
             <template v-if="isFetching">Loading FAQs…</template>
-            <template v-else>{{ faqs.length }} Q&amp;A pair(s) awaiting admin verification</template>
+            <template v-else-if="activeTab === 'pending'">{{ faqs.length }} Q&amp;A pair(s) awaiting admin verification</template>
+            <template v-else>{{ faqs.length }} Q&amp;A pair(s) currently indexed in RAG database</template>
           </p>
         </div>
 
         <div class="flex items-center gap-2">
           <!-- Refresh -->
           <button
-            @click="fetchPending"
+            @click="fetchFaqs"
             :disabled="isFetching"
             class="p-2 rounded-lg border border-gray-200 text-slate-500 hover:text-indigo-600 hover:bg-slate-50 disabled:opacity-40 transition"
-            title="Refresh daftar pending"
+            title="Refresh daftar FAQ"
           >
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"
               :class="['w-4 h-4', isFetching && 'animate-spin']">
               <path fill-rule="evenodd" d="M15.312 11.424a5.5 5.5 0 0 1-9.201 2.466l-.312-.311h2.433a.75.75 0 0 0 0-1.5H3.989a.75.75 0 0 0-.75.75v4.242a.75.75 0 0 0 1.5 0v-2.43l.31.31a7 7 0 0 0 11.712-3.138.75.75 0 0 0-1.449-.39Zm1.23-3.723a.75.75 0 0 0 .219-.53V2.929a.75.75 0 0 0-1.5 0V5.36l-.31-.31A7 7 0 0 0 3.239 8.188a.75.75 0 1 0 1.448.389A5.5 5.5 0 0 1 13.89 6.11l.311.31h-2.432a.75.75 0 0 0 0 1.5h4.243a.75.75 0 0 0 .53-.219Z" clip-rule="evenodd" />
             </svg>
           </button>
+
 
           <!-- Approve All -->
           <button
@@ -616,8 +830,9 @@ async function handleImportJson(event) {
       <!-- Fetch Error -->
       <div v-if="fetchError" class="m-6 flex items-center gap-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl px-4 py-3 shadow-sm">
         <span class="flex-1">{{ fetchError }}</span>
-        <button @click="fetchPending" class="font-bold underline hover:no-underline">Retry</button>
+        <button @click="fetchFaqs" class="font-bold underline hover:no-underline">Retry</button>
       </div>
+
 
       <!-- Skeleton Loader -->
       <div v-if="isFetching" class="p-6 space-y-4">
@@ -662,6 +877,7 @@ async function handleImportJson(event) {
                   </svg>
                 </button>
                 <button
+                  v-if="activeTab === 'pending'"
                   @click="approveFaq(faq.id)"
                   :disabled="processingId === faq.id"
                   class="p-1.5 rounded-lg text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 transition"
@@ -678,12 +894,13 @@ async function handleImportJson(event) {
                   @click="rejectFaq(faq.id)"
                   :disabled="processingId === faq.id"
                   class="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition"
-                  title="Reject &amp; Delete"
+                  :title="activeTab === 'approved' ? 'Delete Permanently' : 'Reject &amp; Delete'"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
                     <path fill-rule="evenodd" d="M8.75 1A2.75 2.75 0 0 0 6 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 1 0 .23 1.482l.149-.022.841 10.518A2.75 2.75 0 0 0 7.596 19h4.807a2.75 2.75 0 0 0 2.742-2.53l.841-10.52.149.023a.75.75 0 0 0 .23-1.482A41.03 41.03 0 0 0 14 4.193V3.75A2.75 2.75 0 0 0 11.25 1h-2.5ZM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4ZM8.58 7.72a.75.75 0 0 0-1.5.06l.3 7.5a.75.75 0 1 0 1.5-.06l-.3-7.5Zm4.34.06a.75.75 0 1 0-1.5-.06l-.3 7.5a.75.75 0 1 0 1.5.06l.3-7.5Z" clip-rule="evenodd" />
                   </svg>
                 </button>
+
               </div>
             </div>
 
@@ -766,9 +983,16 @@ async function handleImportJson(event) {
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-12 h-12 mx-auto mb-3 text-slate-300">
           <path stroke-linecap="round" stroke-linejoin="round" d="M20.25 8.511c.084.29.125.597.125.905v3a.75.75 0 0 1-1.5 0v-3a.75.75 0 0 0-.022-.178m-17.156-.178A.75.75 0 1 1 2.25 9.75M2.25 9.75a9.6 9.6 0 0 1 5.032-6.674m0 0a8.959 8.959 0 0 1 9.436 0m-9.436 0A9.18 9.18 0 0 0 3.361 7.5m13.208-4.424A9.18 9.18 0 0 1 20.639 7.5m0 0a8.96 8.96 0 0 1-2.28 5.766M2.25 9.75A9.6 9.6 0 0 0 4.5 15.5m0 0a8.96 8.96 0 0 0 8.01 4.5 8.96 8.96 0 0 0 8.01-4.5m-16.02 0a8.96 8.96 0 0 1 2.28-5.766" />
         </svg>
-        <p class="text-sm font-medium">No pending FAQs to review.</p>
-        <p class="text-xs text-slate-400 mt-1">Upload a WhatsApp chat file (.txt or .zip) above to start extracting new knowledge.</p>
+        <p class="text-sm font-medium">
+          {{ activeTab === 'pending' ? 'No pending FAQs to review.' : 'No active approved FAQs yet.' }}
+        </p>
+        <p class="text-xs text-slate-400 mt-1">
+          {{ activeTab === 'pending'
+             ? 'Upload a WhatsApp chat file (.txt or .zip) above to start extracting new knowledge.'
+             : 'Click "+ Tambah FAQ Manual" or approve some pending review cards to active them.' }}
+        </p>
       </div>
+
     </div>
   </div>
 </template>

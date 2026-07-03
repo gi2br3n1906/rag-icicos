@@ -87,8 +87,17 @@ export const uploadWhatsAppChat = (file) => {
 /** GET /api/whatsapp/pending */
 export const getPendingFAQs = () => api.get('/api/whatsapp/pending')
 
+/** GET /api/whatsapp/faqs (Filter status: all, pending, or approved) */
+export const getFaqs = (status = 'all') => api.get('/api/whatsapp/faqs', {
+  params: { status_filter: status },
+})
+
+/** POST /api/whatsapp/faqs (Create a new FAQ manually) */
+export const createFaq = (payload) => api.post('/api/whatsapp/faqs', payload)
+
 /** PUT /api/whatsapp/pending/:id */
 export const updatePendingFAQ = (id, payload) => api.put(`/api/whatsapp/pending/${id}`, payload)
+export const updateFAQ = updatePendingFAQ // alias umum
 
 /** DELETE /api/whatsapp/pending/:id */
 export const deletePendingFAQ = (id) => api.delete(`/api/whatsapp/pending/${id}`)
@@ -98,6 +107,7 @@ export const approveSingleFAQ = (id) => api.post(`/api/whatsapp/pending/${id}/ap
 
 /** POST /api/whatsapp/approve-all */
 export const approveAllFAQs = () => api.post('/api/whatsapp/approve-all')
+
 
 /** GET /api/whatsapp/export */
 export const exportFaqs = (status) => api.get('/api/whatsapp/export', {

@@ -45,6 +45,7 @@ from langgraph.graph import END, StateGraph
 
 from backend.rag.generator import (
     FALLBACK_RESPONSE,
+    _dispatch,
     check_sop_answers_query,
     generate_faq_answer,
     generate_sop_answer,
@@ -58,6 +59,55 @@ logger = logging.getLogger(__name__)
 
 # Threshold minimum similarity score agar retrieval dianggap relevan
 RETRIEVAL_THRESHOLD = 0.4
+
+
+# ---------------------------------------------------------------------------
+# Greeting & Bot Identity Responses
+# ---------------------------------------------------------------------------
+GREETING_RESPONSE = (
+    "Hello! 👋 I am the <b>Official Assistant of ICICoS 2026</b>.\n\n"
+    "I am here to guide you through the official procedures and answer FAQs for "
+    "the 9th International Conference on Informatics and Computational Sciences (ICICoS 2026).\n\n"
+    "You can ask me about:\n"
+    "• <b>Paper Submission Guidelines</b> (format, template, IEEE PDF eXpress, etc.)\n"
+    "• <b>Registration & Payments</b> (fees, virtual account bank transfer, mBanking, etc.)\n"
+    "• <b>Important Dates & Timeline</b>\n\n"
+    "How can I help you today? 😊"
+)
+
+DEFAULT_RECOMMENDED_QUESTIONS = [
+    "What is the registration payment procedure?",
+    "How do I use IEEE PDF eXpress?",
+    "What is the paper format guideline?"
+]
+
+
+def check_is_greeting_or_identity(query: str) -> bool:
+    """
+    Cek apakah query adalah salam (greeting), ucapan terima kasih, atau pertanyaan identitas bot.
+    """
+    # 1. Quick regex check first to save tokens
+    q_lower = query.lower().strip().strip("?").strip("!").strip(".")
+    greetings = {
+        "hello", "hi", "halo", "hei", "hey", "p", "assalamualaikum", "selamat pagi", "selamat siang", "selamat sore", "selamat malam",
+        "who are you", "siapa kamu", "siapa anda", "what are you", "what is your name", "siapa namamu", "siapa nama kamu", "bot",
+        "thank you", "thanks", "terima kasih", "makasih", "suwun", "hatur nuhun"
+    }
+    if q_lower in greetings or any(g in q_lower for g in ["who are you", "siapa kamu", "siapa anda", "your name"]):
+        return True
+
+    # 2. Check via quick LLM prompt for typos or other variations (e.g. "wgo are you")
+    prompt = f"""You are a query classifier. Determine if the user's input is a greeting (e.g. "hello", "hi"), a thank you (e.g. "thanks"), or a question asking about your identity/who you are (e.g. "who are you", "what is your role").
+    
+    Answer exactly with YES or NO.
+    
+    User input: "{query}"
+    """
+    try:
+        res = _dispatch(prompt).strip().upper()
+        return res.startswith("YES")
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +178,22 @@ async def node_route(state: AgentState) -> AgentState:
     logger.info("[Workflow] ► Node: route (Parallel Retrieval)")
 
     query = state["rewritten_query"]
+
+    # Cek apakah query berupa greeting / identity query
+    is_greeting = await asyncio.to_thread(check_is_greeting_or_identity, query)
+    if is_greeting:
+        logger.info("[Workflow] Mendeteksi greeting/identity query di Router. Bypass retrieval.")
+        return {
+            **state,
+            "intent": "OTHER",
+            "sop_doc": None,
+            "faq_docs": [],
+            "has_both": False,
+            "other_sops": [],
+            "similarity_score": 1.0,
+            "context_str": "",
+        }
+
     threshold = 0.3 if state.get("is_recommendation") else RETRIEVAL_THRESHOLD
 
     # Jalankan retrieval SOP dan FAQ secara paralel
@@ -402,9 +468,25 @@ async def node_fallback(state: AgentState) -> AgentState:
     Node Terminal: Fallback.
     Digunakan ketika intent = OTHER, atau ketika tidak ada dokumen relevan
     yang ditemukan di database.
+
+    Jika query berupa greeting / identity check, berikan penjelasan yang ramah
+    tentang identitas bot (GREETING_RESPONSE).
     """
     logger.info("[Workflow] ► Node: fallback")
+    query = state["rewritten_query"]
+    is_greeting = await asyncio.to_thread(check_is_greeting_or_identity, query)
+
+    if is_greeting:
+        logger.info("[Workflow] Fallback mendeteksi greeting/identity query. Mengirim GREETING_RESPONSE.")
+        return {
+            **state,
+            "answer": GREETING_RESPONSE,
+            "similarity_score": 1.0,
+            "recommended_questions": DEFAULT_RECOMMENDED_QUESTIONS
+        }
+
     return {**state, "answer": FALLBACK_RESPONSE, "similarity_score": 0.0, "recommended_questions": []}
+
 
 
 # ---------------------------------------------------------------------------

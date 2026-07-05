@@ -66,12 +66,13 @@ RETRIEVAL_THRESHOLD = 0.4
 # ---------------------------------------------------------------------------
 GREETING_RESPONSE = (
     "Hello! 👋 I am the <b>Official Assistant of ICICoS 2026</b>.\n\n"
-    "I am here to guide you through the official Standard Operating Procedures (SOP) for "
-    "the 9th International Conference on Informatics and Computational Sciences (ICICoS 2026).\n\n"
-    "You can ask me about:\n"
-    "• <b>Paper Submission Guidelines</b> (format, template, IEEE PDF eXpress, etc.)\n"
-    "• <b>Registration & Payments</b> (fees, virtual account bank transfer, mBanking, etc.)\n"
-    "• <b>Important Dates & Timeline</b>\n\n"
+    "Here is my role as your guide through the ICICoS 2026 submission and presentation procedures (SOP):\n\n"
+    "1. <b>Official Assistant</b>: Supporting the 9th ICICoS 2026, organized by the Department of Informatics, Universitas Diponegoro.\n"
+    "2. <b>Author Perspective</b>: Guiding you through all the procedural steps from paper submission up to the final presentation.\n"
+    "3. <b>Step-by-Step Assistance</b>: Helping you navigate:\n"
+    "   • <b>Peer Review Phase</b>\n"
+    "   • <b>Pre-Conference Fulfillment</b> (IEEE PDF eXpress, Electronic Copyright Form, and registration payment)\n"
+    "   • <b>Final Presentation Phase</b>\n\n"
     "How can I help you today? 😊"
 )
 

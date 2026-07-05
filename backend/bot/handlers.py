@@ -164,17 +164,19 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """Handler for the /start command. Displays a welcome message."""
     user = update.effective_user
     welcome_message = (
-        f"Hello, {user.first_name}! 👋\n\n"
-        "I am the <b>Official Assistant of ICICoS 2026</b> 🎓\n"
-        "(The 9th International Conference on Informatics and Computational Sciences)\n\n"
-        "I am here to help you with questions about:\n"
-        "• Paper Submission Guidelines\n"
-        "• Registration Payment Procedures\n"
-        "• Conference Schedule & Timeline\n"
-        "• And other official conference information\n\n"
-        "Feel free to type your question directly — in English or Bahasa Indonesia!"
+        f"Hello, {user.first_name}! 👋\n"
+        "I am the <b>Official Assistant of ICICoS 2026</b> 🎓\n\n"
+        "Here is my role as your guide through the ICICoS 2026 submission and presentation procedures (SOP):\n\n"
+        "1. <b>Official Assistant</b>: Supporting the 9th ICICoS 2026, organized by the Department of Informatics, Universitas Diponegoro.\n"
+        "2. <b>Author Perspective</b>: Guiding you through all the procedural steps from paper submission up to the final presentation.\n"
+        "3. <b>Step-by-Step Assistance</b>: Helping you navigate:\n"
+        "   • <b>Peer Review Phase</b>\n"
+        "   • <b>Pre-Conference Fulfillment</b> (IEEE PDF eXpress, Electronic Copyright Form, and registration payment)\n"
+        "   • <b>Final Presentation Phase</b>\n\n"
+        "Feel free to type your question directly — in English or Bahasa Indonesia! 😊"
     )
     await update.message.reply_text(welcome_message, parse_mode="HTML")
+
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

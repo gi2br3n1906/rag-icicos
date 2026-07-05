@@ -5,12 +5,40 @@
  * Data is fetched from GET /api/chat-logs via the centralized Axios service.
  */
 import { ref, computed, onMounted, watch } from 'vue'
-import { getChatLogs } from '@/services/api'
+import { getChatLogs, clearAllChatLogs } from '@/services/api'
+
 
 // ─── Remote data state ───────────────────────────────────────────────────────
 const logs = ref([])
 const isLoading = ref(false)
 const fetchError = ref(null)
+const isResetting = ref(false)
+
+async function handleResetLogs() {
+  const count = logs.value.length
+  if (count === 0) {
+    alert('Tidak ada log chat untuk di-reset.')
+    return
+  }
+
+  const confirmFirst = confirm(`Apakah Anda yakin ingin menghapus seluruh ${count} log percakapan?`)
+  if (!confirmFirst) return
+
+  const confirmSecond = confirm('TINDAKAN INI PERMANEN: Semua riwayat log chat dan memori ingatan Telegram Bot untuk SEMUA user akan dihapus total. Lanjutkan?')
+  if (!confirmSecond) return
+
+  isResetting.value = true
+  try {
+    const { data } = await clearAllChatLogs()
+    alert(data?.message ?? 'Seluruh log percakapan berhasil di-reset.')
+    logs.value = []
+  } catch (err) {
+    console.error('[ChatLogsTable] Failed to reset chat logs:', err)
+    alert(err.response?.data?.detail ?? 'Gagal menghapus log percakapan.')
+  } finally {
+    isResetting.value = false
+  }
+}
 
 async function fetchLogs() {
   isLoading.value = true
@@ -126,6 +154,18 @@ function formatDateTime(val) {
       </div>
 
       <div class="flex items-center gap-3">
+        <!-- Reset logs button -->
+        <button
+          @click="handleResetLogs"
+          :disabled="isLoading || isResetting"
+          class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-600 hover:text-rose-700 rounded-lg disabled:opacity-40 disabled:cursor-not-allowed transition"
+          title="Hapus seluruh riwayat chat log & memori user"
+        >
+          <svg v-if="isResetting" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5 animate-spin"><path fill-rule="evenodd" d="M15.312 11.424a5.5 5.5 0 0 1-9.201 2.466l-.312-.311h2.433a.75.75 0 0 0 0-1.5H3.989a.75.75 0 0 0-.75.75v4.242a.75.75 0 0 0 1.5 0v-2.43l.31.31a7 7 0 0 0 11.712-3.138.75.75 0 0 0-1.449-.39Zm1.23-3.723a.75.75 0 0 0 .219-.53V2.929a.75.75 0 0 0-1.5 0V5.36l-.31-.31A7 7 0 0 0 3.239 8.188a.75.75 0 1 0 1.448.389A5.5 5.5 0 0 1 13.89 6.11l.311.31h-2.432a.75.75 0 0 0 0 1.5h4.243a.75.75 0 0 0 .53-.219Z" clip-rule="evenodd" /></svg>
+          <svg v-else xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3.5 h-3.5"><path fill-rule="evenodd" d="M8.75 1A2.75 2.75 0 0 0 6 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 1 0 .23 1.482l.149-.022.841 10.518A2.75 2.75 0 0 0 7.596 19h4.807a2.75 2.75 0 0 0 2.742-2.53l.841-10.52.149.023a.75.75 0 0 0 .23-1.482A41.03 41.03 0 0 0 14 4.193V3.75A2.75 2.75 0 0 0 11.25 1h-2.5ZM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4ZM8.58 7.72a.75.75 0 0 0-1.5.06l.3 7.5a.75.75 0 1 0 1.5-.06l-.3-7.5Zm4.34.06a.75.75 0 1 0-1.5-.06l-.3 7.5a.75.75 0 1 0 1.5.06l.3-7.5Z" clip-rule="evenodd" /></svg>
+          Reset Memory Logs
+        </button>
+
         <!-- Refresh button -->
         <button
           id="chat-logs-refresh"
@@ -147,6 +187,7 @@ function formatDateTime(val) {
             />
           </svg>
         </button>
+
 
         <!-- Search input -->
         <div class="relative">

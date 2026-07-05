@@ -52,6 +52,10 @@ export default api
 /** GET /api/chat-logs */
 export const getChatLogs = (params = {}) => api.get('/api/chat-logs', { params })
 
+/** DELETE /api/chat-logs (Reset all logs/user memory) */
+export const clearAllChatLogs = () => api.delete('/api/chat-logs')
+
+
 /** GET /api/documents */
 export const getDocuments = () => api.get('/api/documents')
 

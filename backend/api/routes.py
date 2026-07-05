@@ -102,6 +102,41 @@ async def get_chat_logs(
 
 
 # ---------------------------------------------------------------------------
+# Endpoint 2b: DELETE /api/chat-logs
+# ---------------------------------------------------------------------------
+
+from sqlalchemy import delete
+
+@router.delete(
+    "/chat-logs",
+    summary="Reset Semua Log Percakapan & Memori",
+    response_description="Status keberhasilan reset logs",
+)
+async def clear_chat_logs(
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, str]:
+    """
+    Menghapus seluruh baris di tabel `chat_logs`.
+    Mereset semua riwayat obrolan/memory untuk seluruh user Telegram.
+    """
+    try:
+        await db.execute(delete(ChatLog))
+        await db.commit()
+        return {
+            "status": "success",
+            "message": "Seluruh log chat berhasil dihapus. Memori percakapan di-reset."
+        }
+    except Exception as exc:
+        await db.rollback()
+        logger.error(f"[Clear Logs] Gagal menghapus log chat: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Gagal menghapus log chat: {str(exc)}"
+        )
+
+
+
+# ---------------------------------------------------------------------------
 # Endpoint 3: GET /api/stats
 # ---------------------------------------------------------------------------
 

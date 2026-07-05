@@ -90,7 +90,27 @@ function nextPage() {
 function normField(log, camel, snake) {
   return log[camel] ?? log[snake] ?? ''
 }
+
+function formatDateTime(val) {
+  if (!val) return ''
+  try {
+    const d = new Date(val)
+    if (isNaN(d.getTime())) return val
+    
+    const day = String(d.getDate()).padStart(2, '0')
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    const month = months[d.getMonth()]
+    const year = d.getFullYear()
+    const hours = String(d.getHours()).padStart(2, '0')
+    const minutes = String(d.getMinutes()).padStart(2, '0')
+    
+    return `${day} ${month} ${year}, ${hours}:${minutes}`
+  } catch (e) {
+    return val
+  }
+}
 </script>
+
 
 <template>
   <div class="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
@@ -199,8 +219,9 @@ function normField(log, camel, snake) {
           >
             <!-- Timestamp -->
             <td class="px-5 py-3.5 text-slate-500 text-xs whitespace-nowrap font-mono">
-              {{ normField(log, 'timestamp', 'created_at') }}
+              {{ formatDateTime(normField(log, 'timestamp', 'created_at')) }}
             </td>
+
 
             <!-- User ID -->
             <td class="px-5 py-3.5">

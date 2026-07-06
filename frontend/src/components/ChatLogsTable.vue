@@ -137,6 +137,29 @@ function formatDateTime(val) {
     return val
   }
 }
+
+// ─── Expand/Collapse Answers ──────────────────────────────────────────────────
+const expandedLogs = ref({})
+
+function toggleExpand(id) {
+  expandedLogs.value[id] = !expandedLogs.value[id]
+}
+
+function isExpanded(id) {
+  return !!expandedLogs.value[id]
+}
+
+function shouldShowToggle(text) {
+  if (!text) return false
+  // Remove HTML tags to count actual text length
+  const plainText = text.replace(/<[^>]*>/g, '')
+  return plainText.length > 80
+}
+
+// Reset expanded states on page or search filter change
+watch([currentPage, searchQuery], () => {
+  expandedLogs.value = {}
+})
 </script>
 
 
@@ -282,9 +305,36 @@ function formatDateTime(val) {
             </td>
 
             <!-- Bot Answer – renders <b> / <i> HTML from backend safely -->
-            <td class="px-5 py-3.5 text-slate-600 max-w-sm">
-              <!-- eslint-disable-next-line vue/no-v-html -->
-              <p class="line-clamp-2 prose-sm" v-html="log.answer"></p>
+            <td 
+              class="px-5 py-3.5 text-slate-600 max-w-sm transition-colors duration-150"
+              :class="{ 'cursor-pointer hover:bg-indigo-50/30': shouldShowToggle(log.answer) }"
+              @click="shouldShowToggle(log.answer) && toggleExpand(log.id)"
+            >
+              <div class="relative">
+                <!-- eslint-disable-next-line vue/no-v-html -->
+                <div 
+                  :class="[
+                    'prose-sm text-slate-600 leading-relaxed transition-all duration-300',
+                    isExpanded(log.id) ? 'line-clamp-none' : 'line-clamp-2'
+                  ]" 
+                  v-html="log.answer"
+                ></div>
+                
+                <div 
+                  v-if="shouldShowToggle(log.answer)"
+                  class="mt-1.5 flex items-center gap-1 text-[11px] font-bold text-indigo-600 hover:text-indigo-800 transition-colors select-none"
+                >
+                  <span>{{ isExpanded(log.id) ? 'Collapse Answer' : 'Read Full Answer' }}</span>
+                  <svg 
+                    xmlns="http://www.w3.org/2000/svg" 
+                    viewBox="0 0 20 20" 
+                    fill="currentColor" 
+                    :class="['w-3.5 h-3.5 transition-transform duration-200', isExpanded(log.id) ? 'rotate-180' : '']"
+                  >
+                    <path fill-rule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
+                  </svg>
+                </div>
+              </div>
             </td>
 
             <!-- Similarity Score Badge -->

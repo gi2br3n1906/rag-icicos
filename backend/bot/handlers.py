@@ -119,17 +119,24 @@ def _build_reply_keyboard(
     has_both: bool,
     other_sops: list,
     recommended_questions: list,
+    clarification_options: list | None = None,
 ) -> ReplyKeyboardMarkup | None:
     """
     Membangun SATU ReplyKeyboardMarkup terpadu berisi:
+      - [Prioritas] Tombol pilihan cabang SOP jika ada klarifikasi yang dibutuhkan
       - [Opsional] Tombol FAQ (jika has_both=True)
       - [Opsional] Tombol Explore SOP lain yang SUDAH DIVALIDASI (satu per SOP)
       - Tombol pertanyaan lanjutan (max 3)
 
-    Tombol Explore hanya muncul jika workflow.py sudah memverifikasi bahwa
-    SOP tersebut benar-benar dapat menjawab query user (eager pre-validation).
+    Jika clarification_options ada, tampilkan tombol pilihan cabang sebagai baris pertama
+    (prioritas tertinggi) agar user langsung bisa memilih tanpa mengetik.
     """
     buttons = []
+
+    # [Prioritas] Tombol pilihan cabang SOP (jika ada klarifikasi)
+    if clarification_options:
+        for option in clarification_options:
+            buttons.append([KeyboardButton(option)])
 
     # Tombol FAQ (jika ada jawaban dari koleksi WhatsApp FAQ)
     if has_both:
@@ -141,18 +148,24 @@ def _build_reply_keyboard(
         label = filename.replace(".pdf", "").replace("_", " ")
         buttons.append([KeyboardButton(f"{_SOP_BTN_PREFIX}{label}")])
 
-    # Tombol pertanyaan lanjutan
-    for q in recommended_questions[:3]:
-        buttons.append([KeyboardButton(q)])
+    # Tombol pertanyaan lanjutan (hanya jika tidak ada clarification, agar tidak membingungkan)
+    if not clarification_options:
+        for q in recommended_questions[:3]:
+            buttons.append([KeyboardButton(q)])
 
     if not buttons:
         return None
 
+    placeholder = (
+        "Choose an option above or type your answer..."
+        if clarification_options
+        else "Tap a suggestion or type your question..."
+    )
     return ReplyKeyboardMarkup(
         buttons,
         one_time_keyboard=True,
         resize_keyboard=True,
-        input_field_placeholder="Tap a suggestion or type your question...",
+        input_field_placeholder=placeholder,
     )
 
 
@@ -282,23 +295,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         has_both: bool = False
         other_sops: list = []
         recommended_questions: list = []
+        clarification_question: str | None = None
+        clarification_options: list = []
 
         try:
             from backend.api.database import AsyncSessionLocal
 
             async with AsyncSessionLocal() as db_session:
-                answer, similarity_score, has_both, other_sops, recommended_questions = (
-                    await run_agentic_workflow(
-                        query=user_query,
-                        user_id=str(user.id),
-                        db_session=db_session,
-                    )
+                (
+                    answer,
+                    similarity_score,
+                    has_both,
+                    other_sops,
+                    recommended_questions,
+                    clarification_question,
+                    clarification_options,
+                ) = await run_agentic_workflow(
+                    query=user_query,
+                    user_id=str(user.id),
+                    db_session=db_session,
                 )
 
             logger.info(
                 f"[Bot] Jawaban di-generate untuk user {user.id}. "
                 f"Score: {similarity_score:.4f}, has_both={has_both}, "
                 f"other_sops={len(other_sops)}, rec_qs={len(recommended_questions)}, "
+                f"clarification={'YES' if clarification_question else 'NO'}, "
                 f"Panjang: {len(answer)} karakter."
             )
 
@@ -322,11 +344,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Format jawaban: Markdown LLM → HTML Telegram (tanpa teks noise tambahan)
         formatted_answer = format_llm_output(answer)
 
-        # Satu ReplyKeyboard terpadu (FAQ + Explore + Follow-up)
+        # Satu ReplyKeyboard terpadu (Clarification Buttons / FAQ / Explore / Follow-up)
         reply_kb = _build_reply_keyboard(
             has_both=has_both if not is_fallback else False,
             other_sops=other_sops if not is_fallback else [],
             recommended_questions=recommended_questions if not is_fallback else [],
+            clarification_options=clarification_options if not is_fallback else [],
         )
 
         from telegram.error import BadRequest
@@ -341,6 +364,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await update.message.reply_text(
                 answer,
                 reply_markup=reply_kb if reply_kb else ReplyKeyboardRemove(),
+            )
+
+        # Kirim bubble klarifikasi jika SOP bercabang
+        if clarification_question and not is_fallback:
+            logger.info(f"[Bot] Mengirim pertanyaan klarifikasi ke user {user.id}: '{clarification_question}'")
+            await context.bot.send_chat_action(
+                chat_id=update.effective_chat.id, action=ChatAction.TYPING
+            )
+            await asyncio.sleep(0.5)  # Jeda singkat agar pesan pertama muncul dulu
+            await update.message.reply_text(
+                f"🤔 {clarification_question}",
+                parse_mode=ParseMode.HTML,
             )
 
         # Log ke database (fire-and-forget)

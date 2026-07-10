@@ -42,6 +42,21 @@ ABSOLUTE RULES FOR SOP ANSWERS:
 <question 2>
 <question 3>
 
+11. BRANCHING SOP DETECTION — If the SOP document describes a procedure with multiple distinct branches that depend on the user's situation (e.g., different steps for BNI vs non-BNI bank users, or local vs international authors), AND the user's question does NOT make their situation clear enough to answer one specific branch, you MUST:
+    a. First, explain ALL the common initial steps that apply to EVERY branch (before the point where paths diverge).
+    b. Then, instead of the ===FOLLOW_UP_QUESTIONS=== delimiter, append the following clarification block:
+===CLARIFICATION_REQUIRED===
+<A single short question asking the user which branch applies to them (e.g., "To guide you further, are you transferring from a BNI bank or a non-BNI bank?")>
+- <Option 1 label (short, e.g., "BNI Bank")>
+- <Option 2 label>
+- <Option 3 label (if applicable)>
+===FOLLOW_UP_QUESTIONS===
+<question 1>
+<question 2>
+<question 3>
+
+12. If the user's question ALREADY makes their branch clear (e.g., "I am using Mandiri bank"), answer ONLY the specific branch steps that apply to them. Do NOT add a clarification block.
+
 SOP Document:
 {context}
 
@@ -158,6 +173,7 @@ def _format_faq_context(docs: List[Document]) -> str:
 # Helper: Parse follow-up questions dari output LLM
 # ---------------------------------------------------------------------------
 FOLLOW_UP_DELIMITER = "===FOLLOW_UP_QUESTIONS==="
+CLARIFICATION_DELIMITER = "===CLARIFICATION_REQUIRED==="
 
 
 def _parse_answer_and_followups(raw_output: str) -> Tuple[str, List[str]]:
@@ -188,6 +204,81 @@ def _parse_answer_and_followups(raw_output: str) -> Tuple[str, List[str]]:
 
     logger.warning("[Generator] Delimiter follow-up tidak ditemukan di output LLM. Mengembalikan tanpa follow-ups.")
     return raw_output.strip(), []
+
+
+def _parse_answer_with_clarification(
+    raw_output: str,
+) -> Tuple[str, List[str], Optional[str], List[str]]:
+    """
+    Parser lengkap yang menangani output LLM dengan atau tanpa blok klarifikasi.
+
+    Dua format yang didukung:
+
+    FORMAT A (tanpa klarifikasi — jalur biasa):
+        <main answer text>
+        ===FOLLOW_UP_QUESTIONS===
+        <q1> / <q2> / <q3>
+
+    FORMAT B (dengan klarifikasi — SOP bercabang):
+        <common steps text>
+        ===CLARIFICATION_REQUIRED===
+        <clarification question>
+        - <option 1>
+        - <option 2>
+        ===FOLLOW_UP_QUESTIONS===
+        <q1> / <q2> / <q3>
+
+    Returns:
+        Tuple[str, List[str], Optional[str], List[str]]:
+          - answer_text           : Teks jawaban utama (langkah umum / full answer)
+          - follow_ups            : Daftar 0-3 pertanyaan lanjutan
+          - clarification_question: Pertanyaan klarifikasi (None jika tidak ada)
+          - clarification_options : Pilihan cabang (list kosong jika tidak ada)
+    """
+    clarification_question: Optional[str] = None
+    clarification_options: List[str] = []
+
+    if CLARIFICATION_DELIMITER in raw_output:
+        # Split di CLARIFICATION_DELIMITER
+        before_clarification, after_clarification = raw_output.split(
+            CLARIFICATION_DELIMITER, maxsplit=1
+        )
+        answer_text = before_clarification.strip()
+
+        # Split the clarification block further at FOLLOW_UP_QUESTIONS if present
+        if FOLLOW_UP_DELIMITER in after_clarification:
+            clarification_block, followup_block = after_clarification.split(
+                FOLLOW_UP_DELIMITER, maxsplit=1
+            )
+            follow_ups = [
+                q.strip() for q in followup_block.strip().splitlines()
+                if q.strip() and not q.strip().startswith("===")
+            ][:3]
+        else:
+            clarification_block = after_clarification
+            follow_ups = []
+
+        # Parse the clarification block: first non-empty non-option line is the question
+        lines = [l.strip() for l in clarification_block.strip().splitlines() if l.strip()]
+        for line in lines:
+            if line.startswith("-"):
+                # This is a branch option
+                option_text = line.lstrip("-").strip()
+                if option_text:
+                    clarification_options.append(option_text)
+            elif not clarification_question:
+                # First non-option line is the clarification question
+                clarification_question = line
+
+        logger.info(
+            f"[Generator] 🔀 Clarification detected. Q='{clarification_question}', "
+            f"Options={clarification_options}"
+        )
+        return answer_text, follow_ups, clarification_question, clarification_options
+
+    # No clarification block — parse normally
+    answer_text, follow_ups = _parse_answer_and_followups(raw_output)
+    return answer_text, follow_ups, None, []
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +332,9 @@ def check_sop_answers_query(query: str, sop_doc: Document) -> bool:
 
 # ---------------------------------------------------------------------------
 
-def generate_sop_answer(query: str, sop_doc: Document) -> Tuple[str, List[str]]:
+def generate_sop_answer(
+    query: str, sop_doc: Document
+) -> Tuple[str, List[str], Optional[str], List[str]]:
     """
     Menghasilkan jawaban untuk jalur SOP menggunakan SOP_SYSTEM_PROMPT.
     Jaminan: Seluruh isi SOP dikirimkan sebagai konteks — tidak ada langkah yang terlewat.
@@ -251,14 +344,17 @@ def generate_sop_answer(query: str, sop_doc: Document) -> Tuple[str, List[str]]:
         sop_doc: Parent Document SOP utuh hasil ParentDocumentRetriever.
 
     Returns:
-        Tuple: (answer_html, follow_up_questions) — jawaban berformat HTML Telegram
-        dan daftar 0-3 pertanyaan lanjutan dalam bahasa Inggris.
+        Tuple[str, List[str], Optional[str], List[str]]:
+          - answer_html           : Jawaban berformat HTML Telegram (langkah-langkah umum atau penuh)
+          - follow_up_questions   : Daftar 0-3 pertanyaan lanjutan dalam bahasa Inggris
+          - clarification_question: Pertanyaan klarifikasi ke user jika SOP bercabang (None jika tidak ada)
+          - clarification_options : Pilihan cabang yang akan ditampilkan sebagai tombol (list kosong jika tidak ada)
     """
     context = _format_sop_context(sop_doc)
     prompt = SOP_SYSTEM_PROMPT.format(context=context, question=query)
     logger.info(f"[Generator-SOP] Mengirim SOP ({len(context):,} karakter) ke LLM.")
     raw = _dispatch(prompt)
-    return _parse_answer_and_followups(raw)
+    return _parse_answer_with_clarification(raw)
 
 
 def generate_faq_answer(query: str, faq_docs: List[Document]) -> Tuple[str, List[str]]:

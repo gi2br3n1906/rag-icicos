@@ -126,6 +126,8 @@ class AgentState(TypedDict):
     has_both: bool                  # True jika ditemukan di kedua database
     other_sops: List[Dict]          # SOP relevan lainnya selain rank-1
     recommended_questions: List[str]  # Pertanyaan lanjutan dari LLM
+    clarification_question: Optional[str]   # Pertanyaan klarifikasi jika SOP bercabang
+    clarification_options: List[str]        # Opsi cabang untuk ditampilkan sebagai tombol
     context_str: str
     answer: str
     similarity_score: float
@@ -357,7 +359,7 @@ async def node_generate_sop(state: AgentState) -> AgentState:
 
     results = await asyncio.gather(*tasks)
 
-    answer, follow_ups = results[0]
+    answer, follow_ups, clarification_question, clarification_options = results[0]
     validated_sops = [r for r in results[1:] if r is not None]
 
     if other_sops_candidates:
@@ -366,8 +368,21 @@ async def node_generate_sop(state: AgentState) -> AgentState:
             f"{len(other_sops_candidates)} kandidat → {len(validated_sops)} lolos."
         )
 
+    if clarification_question:
+        logger.info(
+            f"[Workflow] 🔀 SOP bercabang terdeteksi. Clarification: '{clarification_question}' "
+            f"| Options: {clarification_options}"
+        )
+
     logger.info(f"[Workflow] SOP answer generated. Follow-ups: {follow_ups}")
-    return {**state, "answer": answer, "recommended_questions": follow_ups, "other_sops": validated_sops}
+    return {
+        **state,
+        "answer": answer,
+        "recommended_questions": follow_ups,
+        "other_sops": validated_sops,
+        "clarification_question": clarification_question,
+        "clarification_options": clarification_options,
+    }
 
 
 
@@ -567,7 +582,7 @@ async def run_agentic_workflow(
     user_id: str,
     db_session: Any = None,
     is_recommendation: bool = False,
-) -> Tuple[str, float, bool, List[Dict], List[str]]:
+) -> Tuple[str, float, bool, List[Dict], List[str], Optional[str], List[str]]:
     """
     Entry point utama untuk menjalankan seluruh Agentic Workflow.
     Dipanggil dari bot/handlers.py.
@@ -579,12 +594,14 @@ async def run_agentic_workflow(
         is_recommendation : True jika ini merupakan pertanyaan lanjutan yang disarankan.
 
     Returns:
-        Tuple[str, float, bool, List[Dict], List[str]]:
-          - str        : Jawaban final yang siap dikirim ke user.
-          - float      : Similarity score tertinggi dari retrieval.
-          - bool       : has_both — True jika ada jawaban di SOP & FAQ.
-          - List[Dict] : other_sops — daftar SOP relevan lainnya.
-          - List[str]  : recommended_questions — pertanyaan lanjutan yang disarankan.
+        Tuple[str, float, bool, List[Dict], List[str], Optional[str], List[str]]:
+          - str          : Jawaban final yang siap dikirim ke user.
+          - float        : Similarity score tertinggi dari retrieval.
+          - bool         : has_both — True jika ada jawaban di SOP & FAQ.
+          - List[Dict]   : other_sops — daftar SOP relevan lainnya.
+          - List[str]    : recommended_questions — pertanyaan lanjutan yang disarankan.
+          - Optional[str]: clarification_question — pertanyaan klarifikasi jika SOP bercabang.
+          - List[str]    : clarification_options — pilihan cabang SOP.
     """
     logger.info(
         f"[Workflow] 🚀 Memulai Agentic Workflow untuk user '{user_id}': '{query[:80]}'"
@@ -600,6 +617,8 @@ async def run_agentic_workflow(
         "has_both": False,
         "other_sops": [],
         "recommended_questions": [],
+        "clarification_question": None,
+        "clarification_options": [],
         "context_str": "",
         "answer": FALLBACK_RESPONSE,
         "similarity_score": 0.0,
@@ -614,17 +633,20 @@ async def run_agentic_workflow(
         has_both = final_state.get("has_both", False)
         other_sops = final_state.get("other_sops", [])
         recommended_questions = final_state.get("recommended_questions", [])
+        clarification_question = final_state.get("clarification_question", None)
+        clarification_options = final_state.get("clarification_options", [])
 
         logger.info(
             f"[Workflow] ✅ Selesai. Score={score:.4f}, has_both={has_both}, "
             f"other_sops={len(other_sops)}, follow_ups={len(recommended_questions)}, "
+            f"clarification={'YES' if clarification_question else 'NO'}, "
             f"Panjang jawaban={len(answer)} karakter."
         )
-        return answer, score, has_both, other_sops, recommended_questions
+        return answer, score, has_both, other_sops, recommended_questions, clarification_question, clarification_options
 
     except Exception as exc:
         logger.error(
             f"[Workflow] ❌ Error fatal pada Agentic Workflow: {exc}",
             exc_info=True,
         )
-        return FALLBACK_RESPONSE, 0.0, False, [], []
+        return FALLBACK_RESPONSE, 0.0, False, [], [], None, []

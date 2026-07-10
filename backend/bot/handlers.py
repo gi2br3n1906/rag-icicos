@@ -352,31 +352,57 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             clarification_options=clarification_options if not is_fallback else [],
         )
 
-        from telegram.error import BadRequest
-        try:
-            await update.message.reply_text(
-                formatted_answer,
-                parse_mode=ParseMode.HTML,
-                reply_markup=reply_kb if reply_kb else ReplyKeyboardRemove(),
-            )
-        except BadRequest as e:
-            logger.warning(f"[Bot] Gagal parse HTML ({e}), fallback ke plain text.")
-            await update.message.reply_text(
-                answer,
-                reply_markup=reply_kb if reply_kb else ReplyKeyboardRemove(),
-            )
+        from telegram.error import BadRequest, TimedOut, NetworkError
 
-        # Kirim bubble klarifikasi jika SOP bercabang
+        async def _send_with_retry(text: str, plain_fallback: str, reply_markup=None) -> None:
+            """Kirim pesan ke Telegram dengan retry hingga 3x jika terjadi TimedOut/NetworkError."""
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    await update.message.reply_text(
+                        text,
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=reply_markup,
+                    )
+                    return  # Berhasil, keluar dari loop
+                except BadRequest as e:
+                    # HTML parse error → kirim ulang tanpa parse_mode (sekali saja, tidak retry)
+                    logger.warning(f"[Bot] Gagal parse HTML ({e}), fallback ke plain text.")
+                    await update.message.reply_text(plain_fallback, reply_markup=reply_markup)
+                    return
+                except (TimedOut, NetworkError) as e:
+                    if attempt < max_retries - 1:
+                        wait_sec = 2 ** attempt  # backoff: 1s → 2s
+                        logger.warning(
+                            f"[Bot] Timeout/NetworkError saat kirim pesan "
+                            f"(attempt {attempt + 1}/{max_retries}): {e}. Retry dalam {wait_sec}s..."
+                        )
+                        await asyncio.sleep(wait_sec)
+                    else:
+                        logger.error(
+                            f"[Bot] ❌ Gagal kirim pesan ke user {user.id} setelah "
+                            f"{max_retries} percobaan: {e}"
+                        )
+
+        # Kirim jawaban utama (dengan retry)
+        await _send_with_retry(
+            text=formatted_answer,
+            plain_fallback=answer,
+            reply_markup=reply_kb if reply_kb else ReplyKeyboardRemove(),
+        )
+
+        # Kirim bubble klarifikasi jika SOP bercabang (dengan retry)
         if clarification_question and not is_fallback:
             logger.info(f"[Bot] Mengirim pertanyaan klarifikasi ke user {user.id}: '{clarification_question}'")
             await context.bot.send_chat_action(
                 chat_id=update.effective_chat.id, action=ChatAction.TYPING
             )
             await asyncio.sleep(0.5)  # Jeda singkat agar pesan pertama muncul dulu
-            await update.message.reply_text(
-                f"🤔 {clarification_question}",
-                parse_mode=ParseMode.HTML,
+            await _send_with_retry(
+                text=f"🤔 {clarification_question}",
+                plain_fallback=clarification_question,
             )
+
 
         # Log ke database (fire-and-forget)
         await _log_chat_to_db(

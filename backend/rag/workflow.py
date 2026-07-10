@@ -427,11 +427,18 @@ async def node_verify(state: AgentState) -> AgentState:
         logger.info("[Workflow] Bypassing verification for fallback or off-topic answer.")
         return state
 
+    # Gabungkan teks jawaban utama dan pertanyaan klarifikasi (jika ada) saat verifikasi.
+    # Ini penting agar verifier mendeteksi bahwa bot sedang bertanya klarifikasi,
+    # sehingga jawaban yang sengaja tidak lengkap/partial diloloskan sebagai valid.
+    answer_to_verify = state["answer"]
+    if state.get("clarification_question"):
+        answer_to_verify += f"\n\n{state['clarification_question']}"
+
     is_valid = await asyncio.to_thread(
         verify_answer,
         state["rewritten_query"],
         state.get("context_str", ""),
-        state["answer"],
+        answer_to_verify,
     )
 
 

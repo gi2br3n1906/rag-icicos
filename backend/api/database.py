@@ -95,4 +95,16 @@ async def init_db() -> None:
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+        # Tambahkan kolom title ke tabel documents secara dinamis jika belum ada.
+        # Ini menghindari kebutuhan Alembic migration untuk penambahan kolom baru.
+        from sqlalchemy import text
+        try:
+            await conn.execute(
+                text("ALTER TABLE documents ADD COLUMN IF NOT EXISTS title VARCHAR(255)")
+            )
+            logger.info("✅ Column 'title' verified/added to 'documents' table.")
+        except Exception as alter_exc:
+            logger.warning(f"[DB] Gagal menambahkan kolom 'title' secara dinamis: {alter_exc}")
+
     logger.info("✅ Database initialized — semua tabel siap digunakan.")
+

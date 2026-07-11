@@ -58,6 +58,7 @@ async def list_documents(
         {
             "id": doc.id,
             "filename": doc.filename,
+            "title": doc.title,
             "total_chunks": doc.total_chunks,
             "status": doc.status,
             "ingested_at": doc.ingested_at.isoformat() if doc.ingested_at else None,
@@ -284,8 +285,11 @@ async def upload_document(
 
     # --- [DB] Catat hasil ingesti ke tabel documents ---
     try:
+        # Judul default: nama file asli tanpa ekstensi, garis bawah diganti spasi
+        default_title = Path(file.filename).stem.replace("_", " ").strip()
         new_doc = Document(
             filename=safe_filename,
+            title=default_title,
             total_chunks=total_chunks,
             status="success",
         )
@@ -315,6 +319,50 @@ async def upload_document(
         "total_chunks": total_chunks,
         "document_id": new_doc.id,
         "ingested_at": new_doc.ingested_at.isoformat() if new_doc.ingested_at else None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Endpoint 4b: PUT /api/documents/{doc_id}/title
+# ---------------------------------------------------------------------------
+
+@router.put(
+    "/documents/{doc_id}/title",
+    summary="Update Judul Kustom Dokumen SOP",
+    response_description="Status update judul dokumen",
+)
+async def update_document_title(
+    doc_id: int,
+    payload: Dict[str, Any],
+    db: AsyncSession = Depends(get_db),
+) -> Dict[str, Any]:
+    """
+    Memperbarui judul kustom (tampilan tombol bot) untuk dokumen SOP.
+    Judul ini akan ditampilkan sebagai label tombol '📖 SOP: <judul>' di Telegram.
+    """
+    new_title = (payload.get("title") or "").strip()
+    if not new_title:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Judul tidak boleh kosong.",
+        )
+
+    result = await db.execute(select(Document).where(Document.id == doc_id))
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Dokumen tidak ditemukan.",
+        )
+
+    doc.title = new_title
+    await db.commit()
+    logger.info(f"[Title] Dokumen ID={doc_id} diubah judulnya menjadi '{new_title}'.")
+    return {
+        "status": "success",
+        "message": "Judul dokumen berhasil diperbarui.",
+        "id": doc_id,
+        "title": new_title,
     }
 
 

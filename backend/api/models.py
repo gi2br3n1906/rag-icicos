@@ -32,6 +32,10 @@ class Document(Base):
         String(255), nullable=False,
         comment="Nama file PDF/DOCX asli yang di-upload"
     )
+    title: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True,
+        comment="Judul kustom untuk tampilan tombol bot (editable dari CMS)"
+    )
     total_chunks: Mapped[int] = mapped_column(
         Integer, nullable=False,
         comment="Jumlah chunk yang berhasil disimpan ke ChromaDB"

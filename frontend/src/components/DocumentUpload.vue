@@ -6,7 +6,7 @@
  * Also provides a "Reset Knowledge Base" button that calls POST /api/knowledge/reset.
  */
 import { ref, onMounted } from 'vue'
-import { getDocuments, uploadDocument, deleteDocument, resetKnowledgeBase, getDocumentChunks } from '@/services/api'
+import { getDocuments, uploadDocument, deleteDocument, resetKnowledgeBase, getDocumentChunks, updateDocumentTitle } from '@/services/api'
 
 // ─── Document list state ──────────────────────────────────────────────────────
 const documents = ref([])
@@ -233,6 +233,38 @@ function closeChunkViewer() {
   isViewingChunks.value = false
   currentChunks.value = []
 }
+
+// ─── Inline Title Edit ────────────────────────────────────────────────────────
+const editingDocId = ref(null)
+const editingTitle = ref('')
+const isSavingTitle = ref(false)
+
+function startEditTitle(doc) {
+  editingDocId.value = doc.id
+  // Prefer the stored title; fall back to filename stem
+  editingTitle.value = doc.title || normDoc(doc, 'name', 'filename').replace(/\.[^.]+$/, '').replace(/_/g, ' ').trim()
+}
+
+function cancelEdit() {
+  editingDocId.value = null
+  editingTitle.value = ''
+}
+
+async function saveTitle(doc) {
+  if (!editingTitle.value.trim()) return
+  isSavingTitle.value = true
+  try {
+    await updateDocumentTitle(doc.id, editingTitle.value.trim())
+    // Patch local state so no refetch needed
+    doc.title = editingTitle.value.trim()
+    cancelEdit()
+  } catch (err) {
+    console.error('[DocumentUpload] Failed to update title:', err)
+    fetchDocsError.value = err.response?.data?.detail ?? err.message ?? 'Failed to update title.'
+  } finally {
+    isSavingTitle.value = false
+  }
+}
 </script>
 
 <template>
@@ -424,16 +456,38 @@ function closeChunkViewer() {
 
           <!-- Doc info -->
           <div class="flex-1 min-w-0">
-            <p class="text-sm font-medium text-slate-700 truncate">
-              {{ normDoc(doc, 'name', 'filename') }}
-            </p>
-            <p class="text-xs text-slate-400 mt-0.5">
-              {{ normDoc(doc, 'size', 'file_size') }}
-              <template v-if="normDoc(doc, 'pages', 'page_count', null)">
-                · {{ normDoc(doc, 'pages', 'page_count') }} pages
-              </template>
-              · Uploaded {{ normDoc(doc, 'uploadedAt', 'uploaded_at') }}
-            </p>
+            <!-- Title edit mode -->
+            <template v-if="editingDocId === doc.id">
+              <div class="flex items-center gap-1.5">
+                <input
+                  v-model="editingTitle"
+                  @keyup.enter="saveTitle(doc)"
+                  @keyup.escape="cancelEdit"
+                  class="flex-1 text-sm border border-indigo-300 rounded-lg px-2 py-0.5 focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-indigo-50/40"
+                  placeholder="Enter display title…"
+                  autofocus
+                />
+                <button
+                  @click="saveTitle(doc)"
+                  :disabled="isSavingTitle"
+                  class="text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 px-2 py-0.5 rounded-lg transition-colors"
+                >Save</button>
+                <button
+                  @click="cancelEdit"
+                  class="text-xs text-slate-400 hover:text-slate-600 px-1.5 py-0.5 rounded-lg transition-colors"
+                >Cancel</button>
+              </div>
+            </template>
+            <!-- Normal display mode -->
+            <template v-else>
+              <p class="text-sm font-medium text-slate-700 truncate">
+                {{ doc.title || normDoc(doc, 'name', 'filename').replace(/\.[^.]+$/, '').replace(/_/g, ' ') }}
+              </p>
+              <p class="text-xs text-slate-400 mt-0.5">
+                {{ normDoc(doc, 'name', 'filename') }}
+                · Uploaded {{ normDoc(doc, 'uploadedAt', 'uploaded_at') }}
+              </p>
+            </template>
           </div>
 
           <!-- Status badge -->
@@ -446,6 +500,19 @@ function closeChunkViewer() {
 
           <!-- Action buttons (hover-reveal) -->
           <div class="shrink-0 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <!-- Edit title button -->
+            <button
+              :id="`edit-title-${doc.id}`"
+              @click="startEditTitle(doc)"
+              class="p-1.5 rounded-lg text-slate-400 hover:text-violet-600 hover:bg-violet-50 transition-colors"
+              title="Edit button title"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4">
+                <path d="M5.433 13.917l1.262-3.155A4 4 0 0 1 7.58 9.42l6.92-6.918a2.121 2.121 0 0 1 3 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 0 1-.65-.65Z" />
+                <path d="M3.5 5.75c0-.69.56-1.25 1.25-1.25H10A.75.75 0 0 0 10 3H4.75A2.75 2.75 0 0 0 2 5.75v9.5A2.75 2.75 0 0 0 4.75 18h9.5A2.75 2.75 0 0 0 17 15.25V10a.75.75 0 0 0-1.5 0v5.25c0 .69-.56 1.25-1.25 1.25h-9.5c-.69 0-1.25-.56-1.25-1.25v-9.5Z" />
+              </svg>
+            </button>
+
             <!-- View Chunks button -->
             <button
               :id="`view-doc-${doc.id}`"

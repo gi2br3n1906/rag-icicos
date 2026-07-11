@@ -161,7 +161,8 @@ def _build_reply_keyboard(
     # Tombol Explore SOP lain — sudah dijamin relevan oleh workflow validator
     for sop in other_sops:
         filename = sop.get("filename", "")
-        label = clean_filename_to_label(filename)
+        # Gunakan judul kustom dari DB jika tersedia, fallback ke derived label
+        label = sop.get("title") or clean_filename_to_label(filename)
         buttons.append([KeyboardButton(f"{_SOP_BTN_PREFIX}{label}")])
 
     # Tombol pertanyaan lanjutan (hanya jika tidak ada clarification, agar tidak membingungkan)
@@ -287,7 +288,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             stored_sops: list = context.user_data.get("other_sops", [])
             filename = next(
                 (s["filename"] for s in stored_sops
-                 if clean_filename_to_label(s["filename"]) == label_clicked),
+                 if (s.get("title") or clean_filename_to_label(s["filename"])) == label_clicked),
                 None,
             )
             if filename:

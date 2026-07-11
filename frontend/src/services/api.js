@@ -75,6 +75,9 @@ export const uploadDocument = (file) => {
 /** DELETE /api/documents/:id */
 export const deleteDocument = (id) => api.delete(`/api/documents/${id}`)
 
+/** PUT /api/documents/:id/title */
+export const updateDocumentTitle = (id, title) => api.put(`/api/documents/${id}/title`, { title })
+
 /** GET /api/stats */
 export const getDashboardStats = () => api.get('/api/stats')
 

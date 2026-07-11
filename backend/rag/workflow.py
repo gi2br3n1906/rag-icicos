@@ -42,6 +42,7 @@ from typing import Any, Dict, List, Optional, Tuple, TypedDict
 
 from langchain_core.documents import Document
 from langgraph.graph import END, StateGraph
+from sqlalchemy import select
 
 from backend.rag.generator import (
     FALLBACK_RESPONSE,
@@ -244,6 +245,24 @@ async def node_route(state: AgentState) -> AgentState:
             f"[Workflow] Other relevant SOPs detected: "
             f"{[o['filename'] for o in other_sops]}"
         )
+        # Enrich other_sops with custom titles from the documents table (if available)
+        db = state.get("db_session")
+        if db:
+            from backend.api.models import Document as DocModel
+            for o in other_sops:
+                try:
+                    stmt = select(DocModel.title).where(DocModel.filename == o["filename"])
+                    res = await db.execute(stmt)
+                    db_title = res.scalar_one_or_none()
+                    # Fallback: derivasi judul dari nama file (tanpa ekstensi, _ → spasi)
+                    fallback = o["filename"].rsplit(".", 1)[0].replace("_", " ").strip()
+                    o["title"] = db_title if db_title else fallback
+                except Exception as db_exc:
+                    logger.warning(f"[Workflow] Gagal fetch title untuk '{o['filename']}': {db_exc}")
+                    o["title"] = o["filename"].rsplit(".", 1)[0].replace("_", " ").strip()
+        else:
+            for o in other_sops:
+                o["title"] = o["filename"].rsplit(".", 1)[0].replace("_", " ").strip()
 
     return {
         **state,

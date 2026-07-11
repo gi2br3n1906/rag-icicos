@@ -605,7 +605,7 @@ async def _handle_show_sop(update, context, user, filename: str):
             return
 
         label = clean_filename_to_label(filename)
-        sop_answer, _, _, _ = await asyncio.to_thread(
+        sop_answer, follow_ups, clarification_question, clarification_options = await asyncio.to_thread(
             generate_sop_answer, last_query or f"What does {filename} cover?", sop_doc
         )
         formatted_sop = format_llm_output(sop_answer)
@@ -615,18 +615,61 @@ async def _handle_show_sop(update, context, user, filename: str):
             f"Panjang: {len(sop_answer)} karakter."
         )
 
-        from telegram.error import BadRequest
-        try:
-            await context.bot.send_message(
+        # Bangun ReplyKeyboard terpadu untuk SOP ini (FAQ & other sops dinonaktifkan di sub-SOP)
+        reply_kb = _build_reply_keyboard(
+            has_both=False,
+            other_sops=[],
+            recommended_questions=follow_ups,
+            clarification_options=clarification_options,
+        )
+
+        from telegram.error import BadRequest, TimedOut, NetworkError
+
+        async def _send_msg_with_retry(text: str, plain_text: str, reply_markup=None) -> None:
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    await context.bot.send_message(
+                        chat_id=update.effective_chat.id,
+                        text=text,
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=reply_markup,
+                    )
+                    return
+                except BadRequest as e:
+                    logger.warning(f"[SOP-Explore] Gagal parse HTML ({e}), fallback ke plain text.")
+                    await context.bot.send_message(
+                        chat_id=update.effective_chat.id,
+                        text=plain_text,
+                        reply_markup=reply_markup,
+                    )
+                    return
+                except (TimedOut, NetworkError) as e:
+                    if attempt < max_retries - 1:
+                        wait_sec = 2 ** attempt
+                        logger.warning(f"[SOP-Explore] Timeout/NetworkError ({attempt+1}/{max_retries}): {e}. Retry...")
+                        await asyncio.sleep(wait_sec)
+                    else:
+                        logger.error(f"[SOP-Explore] Gagal kirim setelah {max_retries}x: {e}")
+
+        # Kirim pesan utama (dengan retry & keyboard)
+        await _send_msg_with_retry(
+            text=f"📄 <b>From: {label}</b>\n\n{formatted_sop}",
+            plain_text=f"📄 From: {label}\n\n{sop_answer}",
+            reply_markup=reply_kb if reply_kb else ReplyKeyboardRemove(),
+        )
+
+        # Kirim bubble klarifikasi jika SOP bercabang (dengan retry)
+        if clarification_question:
+            logger.info(f"[SOP-Explore] Mengirim pertanyaan klarifikasi ke user {user.id}: '{clarification_question}'")
+            await context.bot.send_chat_action(
                 chat_id=update.effective_chat.id,
-                text=f"📄 <b>From: {label}</b>\n\n{formatted_sop}",
-                parse_mode=ParseMode.HTML,
+                action=ChatAction.TYPING,
             )
-        except BadRequest as e:
-            logger.warning(f"[SOP-Explore] Gagal parse HTML ({e}), fallback ke plain text.")
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text=f"📄 From: {label}\n\n{sop_answer}",
+            await asyncio.sleep(0.5)
+            await _send_msg_with_retry(
+                text=f"🤔 {clarification_question}",
+                plain_text=clarification_question,
             )
 
     except Exception as exc:

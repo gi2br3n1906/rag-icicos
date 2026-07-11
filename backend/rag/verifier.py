@@ -53,6 +53,15 @@ Return a JSON object ONLY:
 JSON output:"""
 
 
+def _extract_json(raw_text: str) -> str:
+    """Mengekstrak substring JSON terluar dari teks mentah."""
+    start = raw_text.find("{")
+    end = raw_text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return raw_text[start : end + 1]
+    return raw_text
+
+
 def verify_answer(query: str, context: str, answer: str) -> bool:
     """
     Mengevaluasi kualitas draf jawaban sebelum dikirim ke user.
@@ -96,7 +105,8 @@ def verify_answer(query: str, context: str, answer: str) -> bool:
         )
 
         raw = response.text.strip()
-        data = json.loads(raw)
+        cleaned_raw = _extract_json(raw)
+        data = json.loads(cleaned_raw)
         is_valid = bool(data.get("is_valid", True))
         reason = data.get("reason", "No reason provided.")
 

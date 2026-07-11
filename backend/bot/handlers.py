@@ -112,7 +112,23 @@ async def _log_chat_to_db(
 # ---------------------------------------------------------------------------
 # Teks tombol ini di-detect di awal handle_message untuk routing ke sub-handler.
 _FAQ_BTN_PREFIX = "📖 Show FAQ Answer"
-_SOP_BTN_PREFIX = "🔍 Explore: "
+_SOP_BTN_PREFIX = "📖 SOP: "
+
+
+def clean_filename_to_label(filename: str) -> str:
+    """
+    Mengonversi nama file mentah menjadi label tombol yang bersih:
+    - Menghapus ekstensi .pdf
+    - Menghapus suffix Unix timestamp (misal: _1783073834) di akhir nama file
+    - Mengganti underscore dengan spasi
+    """
+    name = filename
+    if name.lower().endswith(".pdf"):
+        name = name[:-4]
+    name = re.sub(r'_\d{10}$', '', name)
+    name = name.replace("_", " ")
+    return name.strip()
+
 
 
 def _build_reply_keyboard(
@@ -145,7 +161,7 @@ def _build_reply_keyboard(
     # Tombol Explore SOP lain — sudah dijamin relevan oleh workflow validator
     for sop in other_sops:
         filename = sop.get("filename", "")
-        label = filename.replace(".pdf", "").replace("_", " ")
+        label = clean_filename_to_label(filename)
         buttons.append([KeyboardButton(f"{_SOP_BTN_PREFIX}{label}")])
 
     # Tombol pertanyaan lanjutan (hanya jika tidak ada clarification, agar tidak membingungkan)
@@ -271,7 +287,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             stored_sops: list = context.user_data.get("other_sops", [])
             filename = next(
                 (s["filename"] for s in stored_sops
-                 if s["filename"].replace(".pdf", "").replace("_", " ") == label_clicked),
+                 if clean_filename_to_label(s["filename"]) == label_clicked),
                 None,
             )
             if filename:
@@ -588,8 +604,8 @@ async def _handle_show_sop(update, context, user, filename: str):
             )
             return
 
-        label = filename.replace(".pdf", "").replace("_", " ")
-        sop_answer, _ = await asyncio.to_thread(
+        label = clean_filename_to_label(filename)
+        sop_answer, _, _, _ = await asyncio.to_thread(
             generate_sop_answer, last_query or f"What does {filename} cover?", sop_doc
         )
         formatted_sop = format_llm_output(sop_answer)

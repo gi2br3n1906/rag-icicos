@@ -153,3 +153,37 @@ class WhatsAppFAQ(Base):
             f"category='{self.category}', source='{self.source_file}')>"
         )
 
+
+class User(Base):
+    """
+    Tabel: users
+    Menyimpan kredensial login admin dan humas untuk keperluan hak akses dashboard.
+    """
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(
+        Integer, primary_key=True, autoincrement=True
+    )
+    email: Mapped[str] = mapped_column(
+        String(255), nullable=False, unique=True, index=True,
+        comment="Email user sebagai username login"
+    )
+    password_hash: Mapped[str] = mapped_column(
+        String(255), nullable=False,
+        comment="Hashed password menggunakan bcrypt"
+    )
+    role: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="humas",
+        comment="Role user: 'admin' atau 'humas'"
+    )
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        comment="Waktu user dibuat dalam UTC"
+    )
+
+    def __repr__(self) -> str:
+        return f"<User(id={self.id}, email='{self.email}', role='{self.role}')>"
+
+

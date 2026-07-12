@@ -18,15 +18,125 @@ import io
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status, BackgroundTasks, Query
 from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import jwt
+from fastapi import Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.database import get_db
-from backend.api.models import ChatLog, Document, WhatsAppFAQ
+from backend.api.models import ChatLog, Document, WhatsAppFAQ, User
+from backend.core.config import settings
+from backend.core.security import verify_password, create_access_token
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api", tags=["Admin API"])
+# Bearer Token Scheme
+security_bearer = HTTPBearer()
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security_bearer),
+    db: AsyncSession = Depends(get_db)
+) -> User:
+    token = credentials.credentials
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(
+            token,
+            settings.jwt_secret_key,
+            algorithms=[settings.jwt_algorithm]
+        )
+        email: str = payload.get("sub")
+        if email is None:
+            raise credentials_exception
+    except jwt.PyJWTError:
+        raise credentials_exception
+
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise credentials_exception
+    return user
+
+async def check_permissions(
+    request: Request,
+    current_user: User = Depends(get_current_user)
+):
+    # GET requests can be accessed by both admin and humas
+    if request.method == "GET":
+        return current_user
+    
+    # POST, PUT, DELETE require admin
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden: Admin role required for modifying operations."
+        )
+    return current_user
+
+# Public Auth Router
+auth_router = APIRouter(prefix="/api/auth", tags=["Auth API"])
+
+@auth_router.post(
+    "/login",
+    summary="Login Pengguna Admin/Humas",
+    response_description="Access token dan informasi user"
+)
+async def login(
+    payload: Dict[str, Any],
+    db: AsyncSession = Depends(get_db)
+) -> Dict[str, Any]:
+    email = (payload.get("email") or "").strip()
+    password = payload.get("password") or ""
+
+    if not email or not password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email dan password wajib diisi."
+        )
+
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+    if not user or not verify_password(password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Email atau password salah."
+        )
+
+    access_token = create_access_token(data={"sub": user.email})
+    return {
+        "status": "success",
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": {
+            "email": user.email,
+            "role": user.role
+        }
+    }
+
+@auth_router.get(
+    "/me",
+    summary="Informasi Pengguna Aktif",
+    response_description="Detail profil pengguna aktif"
+)
+async def get_current_user_profile(
+    current_user: User = Depends(get_current_user)
+) -> Dict[str, Any]:
+    return {
+        "email": current_user.email,
+        "role": current_user.role
+    }
+
+# Protected Admin API Router
+router = APIRouter(
+    prefix="/api",
+    tags=["Admin API"],
+    dependencies=[Depends(check_permissions)]
+)
 
 # Folder penyimpanan sementara file PDF yang di-upload
 # Path relatif terhadap posisi backend/ dijalankan sebagai CWD

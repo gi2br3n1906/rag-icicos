@@ -21,9 +21,10 @@ const api = axios.create({
 // ─── Request interceptor ─────────────────────────────────────────────────────
 api.interceptors.request.use(
   (config) => {
-    // Attach Bearer token when authentication is implemented:
-    // const token = localStorage.getItem('access_token')
-    // if (token) config.headers.Authorization = `Bearer ${token}`
+    const token = localStorage.getItem('auth_token')
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`
+    }
     return config
   },
   (error) => Promise.reject(error),
@@ -36,7 +37,11 @@ api.interceptors.response.use(
     const status = error.response?.status
 
     if (status === 401) {
-      console.warn('[API] 401 Unauthorized – implement redirect to login here.')
+      console.warn('[API] 401 Unauthorized – redirecting to login.')
+      localStorage.removeItem('auth_token')
+      localStorage.removeItem('user_role')
+      localStorage.removeItem('user_email')
+      window.location.href = '/login'
     } else if (status === 500) {
       console.error('[API] 500 Server error', error.response?.data)
     }
@@ -136,6 +141,10 @@ export const importFaqsJson = (file) => {
     timeout: 120_000, // 2 menit untuk proses embed ke ChromaDB
   })
 }
+
+/** POST /api/auth/login */
+export const loginUser = (email, password) => api.post('/api/auth/login', { email, password })
+
 
 /** POST /api/knowledge/reset — wipes ChromaDB and all DB records (destructive!) */
 export const resetKnowledgeBase = () => api.post('/api/knowledge/reset')

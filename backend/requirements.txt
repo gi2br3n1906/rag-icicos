@@ -60,3 +60,7 @@ pytest-asyncio==0.24.0
 httpx==0.28.1                   # Test client FastAPI (juga dipakai di runtime)
 
 langchain-ollama>=0.1.0
+
+# --- Authentication & Hashing ---
+PyJWT==2.10.1
+bcrypt==4.2.1

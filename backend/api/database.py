@@ -115,5 +115,30 @@ async def init_db() -> None:
         except Exception as alter_exc:
             logger.warning(f"[DB] Gagal menambahkan kolom 'username' secara dinamis: {alter_exc}")
 
+        # Lakukan seeding untuk akun Admin & Humas jika tabel users masih kosong
+        from backend.core.security import get_password_hash
+        try:
+            res = await conn.execute(text("SELECT COUNT(*) FROM users"))
+            count = res.scalar()
+            if count == 0:
+                admin_hash = get_password_hash("chatbot9.")
+                humas_hash = get_password_hash("chatbot9.")
+                await conn.execute(
+                    text(
+                        "INSERT INTO users (email, password_hash, role) VALUES "
+                        "(:admin_email, :admin_hash, 'admin'), "
+                        "(:humas_email, :humas_hash, 'humas')"
+                    ),
+                    {
+                        "admin_email": "icicos@live.undip.ac.id",
+                        "admin_hash": admin_hash,
+                        "humas_email": "cs.icicos@gmail.com",
+                        "humas_hash": humas_hash,
+                    }
+                )
+                logger.info("✅ Database seeded: admin and humas users created.")
+        except Exception as seed_exc:
+            logger.warning(f"[DB] Gagal seeding user: {seed_exc}")
+
     logger.info("✅ Database initialized — semua tabel siap digunakan.")
 

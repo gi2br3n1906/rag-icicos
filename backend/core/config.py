@@ -32,9 +32,13 @@ class Settings(BaseSettings):
     retriever_top_k: int = 4
     similarity_threshold: float = 0.4
 
-    # --- Application ---
+    # --- Application & Auth ---
     app_env: str = "development"              # "development" atau "production"
     log_level: str = "INFO"
+    jwt_secret_key: str = "supersecretkeyicicos2026"
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 1440
+
 
 
 # Singleton instance - impor dari sini di seluruh aplikasi

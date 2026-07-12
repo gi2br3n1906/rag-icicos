@@ -29,6 +29,12 @@ axios.interceptors.response.use(
 // ─── Vue Router ────────────────────────────────────────────────────────────
 const routes = [
   {
+    path: '/login',
+    name: 'Login',
+    component: () => import('./views/Login.vue'),
+    meta: { title: 'Login – ICICoS 2026 Admin', isPublic: true },
+  },
+  {
     path: '/',
     redirect: '/dashboard',
   },
@@ -42,13 +48,13 @@ const routes = [
     path: '/documents',
     name: 'DocumentManager',
     component: () => import('./views/DocumentManager.vue'),
-    meta: { title: 'Document Manager – ICICoS 2026 Admin' },
+    meta: { title: 'Document Manager – ICICoS 2026 Admin', requiresAdmin: true },
   },
   {
     path: '/whatsapp-review',
     name: 'WhatsAppReview',
     component: () => import('./views/WhatsAppReview.vue'),
-    meta: { title: 'WhatsApp Review – ICICoS 2026 Admin' },
+    meta: { title: 'WhatsApp Review – ICICoS 2026 Admin', requiresAdmin: true },
   },
   {
     path: '/:pathMatch(.*)*',
@@ -59,6 +65,29 @@ const routes = [
 const router = createRouter({
   history: createWebHistory(),
   routes,
+})
+
+// Authentication & Authorization Route Guard
+router.beforeEach((to, from, next) => {
+  const isAuthenticated = !!localStorage.getItem('auth_token')
+  const userRole = localStorage.getItem('user_role')
+
+  // Not logged in -> redirect to login if private page
+  if (!to.meta.isPublic && !isAuthenticated) {
+    return next({ name: 'Login' })
+  }
+
+  // Already logged in -> redirect away from login page
+  if (to.name === 'Login' && isAuthenticated) {
+    return next({ name: 'DashboardOverview' })
+  }
+
+  // Admin access check
+  if (to.meta.requiresAdmin && userRole !== 'admin') {
+    return next({ name: 'DashboardOverview' })
+  }
+
+  next()
 })
 
 // Update document title on each navigation

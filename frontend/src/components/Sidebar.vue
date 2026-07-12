@@ -29,6 +29,15 @@ const navItems = [
   },
 ]
 
+const userRole = computed(() => localStorage.getItem('user_role'))
+
+const filteredNavItems = computed(() => {
+  if (userRole.value === 'humas') {
+    return navItems.filter(item => item.path === '/dashboard')
+  }
+  return navItems
+})
+
 function isActive(path) {
   return route.path === path
 }
@@ -36,6 +45,14 @@ function isActive(path) {
 function navigate(path) {
   emit('close')
   router.push(path)
+}
+
+function handleLogout() {
+  localStorage.removeItem('auth_token')
+  localStorage.removeItem('user_role')
+  localStorage.removeItem('user_email')
+  emit('close')
+  router.push({ name: 'Login' })
 }
 </script>
 
@@ -80,7 +97,7 @@ function navigate(path) {
       </p>
 
       <button
-        v-for="item in navItems"
+        v-for="item in filteredNavItems"
         :key="item.path"
         @click="navigate(item.path)"
         :class="[
@@ -103,9 +120,21 @@ function navigate(path) {
     </nav>
 
     <!-- Footer / Version -->
-    <div class="px-5 py-4 border-t border-slate-700/60">
-      <p class="text-slate-600 text-xs">RAG System v1.0.0</p>
-      <p class="text-slate-700 text-xs mt-0.5">© 2026 ICICoS Committee</p>
+    <div class="px-5 py-4 border-t border-slate-700/60 flex flex-col gap-2.5">
+      <!-- Logout button -->
+      <button 
+        @click="handleLogout"
+        class="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 rounded-lg transition"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-4 h-4">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15M12 9l-3 3m0 0 3 3m-3-3h12.75" />
+        </svg>
+        Sign Out
+      </button>
+      <div class="pt-1.5 border-t border-slate-800/40">
+        <p class="text-slate-600 text-xs">RAG System v1.0.0</p>
+        <p class="text-slate-700 text-xs mt-0.5">© 2026 ICICoS Committee</p>
+      </div>
     </div>
   </aside>
 </template>

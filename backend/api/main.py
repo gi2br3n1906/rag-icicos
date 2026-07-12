@@ -24,7 +24,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.config import settings
 from backend.api.database import get_db, init_db
-from backend.api.routes import router as api_router
+from backend.api.routes import router as api_router, auth_router
+
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,9 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # Include Routers
 # ---------------------------------------------------------------------------
+app.include_router(auth_router)
 app.include_router(api_router)
+
 
 
 # ---------------------------------------------------------------------------

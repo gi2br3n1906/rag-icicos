@@ -7,6 +7,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { getChatLogs, clearAllChatLogs } from '@/services/api'
 
+const userRole = localStorage.getItem('user_role')
 
 // ─── Remote data state ───────────────────────────────────────────────────────
 const logs = ref([])
@@ -201,6 +202,7 @@ watch([currentPage, searchQuery], () => {
       <div class="flex items-center gap-3">
         <!-- Reset logs button -->
         <button
+          v-if="userRole === 'admin'"
           @click="handleResetLogs"
           :disabled="isLoading || isResetting"
           class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-600 hover:text-rose-700 rounded-lg disabled:opacity-40 disabled:cursor-not-allowed transition"

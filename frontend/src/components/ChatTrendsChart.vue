@@ -20,8 +20,8 @@ const tooltipContent = ref({ label: '', value: 0 })
 
 // Chart geometry settings
 const width = 800
-const height = 280
-const padding = { top: 30, right: 30, bottom: 40, left: 50 }
+const height = 160
+const padding = { top: 15, right: 25, bottom: 25, left: 40 }
 
 const chartWidth = computed(() => width - padding.left - padding.right)
 const chartHeight = computed(() => height - padding.top - padding.bottom)

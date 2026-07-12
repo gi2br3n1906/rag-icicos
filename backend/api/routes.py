@@ -441,6 +441,152 @@ async def get_dashboard_stats(
     }
 
 
+@router.get(
+    "/stats/trends",
+    summary="Data Tren Chat Log",
+    response_description="Data tren jumlah chat log untuk diagram (hourly, daily, weekly, monthly)"
+)
+async def get_chat_trends(
+    range: str = "daily",  # "hourly" | "daily" | "weekly" | "monthly"
+    db: AsyncSession = Depends(get_db)
+) -> List[Dict[str, Any]]:
+    """
+    Mengambil data statistik tren interaksi untuk divisualisasikan dalam diagram area.
+    Mendukung rentang waktu: hourly (24 jam terakhir), daily (7 hari terakhir),
+    weekly (6 minggu terakhir), dan monthly (6 bulan terakhir).
+    """
+    import datetime
+    from datetime import timedelta
+    from collections import OrderedDict
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    data_dict = OrderedDict()
+
+    if range == "hourly":
+        # Tren 24 jam terakhir (per jam)
+        start_time = now - timedelta(hours=23)
+        start_hour = start_time.replace(minute=0, second=0, microsecond=0)
+        
+        result = await db.execute(
+            select(ChatLog.created_at)
+            .where(ChatLog.created_at >= start_hour)
+            .order_by(ChatLog.created_at.asc())
+        )
+        timestamps = result.scalars().all()
+
+        # Inisialisasi slot jam 0-23
+        for i in range(24):
+            dt = start_hour + timedelta(hours=i)
+            label = dt.strftime("%H:00")
+            data_dict[label] = 0
+
+        for ts in timestamps:
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=datetime.timezone.utc)
+            label = ts.strftime("%H:00")
+            if label in data_dict:
+                data_dict[label] += 1
+
+    elif range == "daily":
+        # Tren 7 hari terakhir (per hari)
+        start_time = now - timedelta(days=6)
+        start_date = start_time.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        result = await db.execute(
+            select(ChatLog.created_at)
+            .where(ChatLog.created_at >= start_date)
+            .order_by(ChatLog.created_at.asc())
+        )
+        timestamps = result.scalars().all()
+
+        # Inisialisasi slot 7 hari terakhir
+        for i in range(7):
+            dt = start_date + timedelta(days=i)
+            label = dt.strftime("%d %b")
+            data_dict[label] = 0
+
+        for ts in timestamps:
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=datetime.timezone.utc)
+            label = ts.strftime("%d %b")
+            if label in data_dict:
+                data_dict[label] += 1
+
+    elif range == "weekly":
+        # Tren 6 minggu terakhir (per rentang minggu)
+        start_time = now - timedelta(days=41)
+        start_date = start_time.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        result = await db.execute(
+            select(ChatLog.created_at)
+            .where(ChatLog.created_at >= start_date)
+            .order_by(ChatLog.created_at.asc())
+        )
+        timestamps = result.scalars().all()
+
+        # Inisialisasi slot 6 minggu terakhir
+        for i in range(6):
+            week_start = start_date + timedelta(days=i*7)
+            week_end = week_start + timedelta(days=6)
+            label = f"{week_start.strftime('%d/%m')} - {week_end.strftime('%d/%m')}"
+            data_dict[label] = 0
+
+        for ts in timestamps:
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=datetime.timezone.utc)
+            for label in data_dict:
+                parts = label.split(" - ")
+                try:
+                    s_day, s_month = map(int, parts[0].split("/"))
+                    e_day, e_month = map(int, parts[1].split("/"))
+                    start_val = datetime.datetime(now.year, s_month, s_day, 0, 0, 0, tzinfo=datetime.timezone.utc)
+                    end_val = datetime.datetime(now.year, e_month, e_day, 23, 59, 59, tzinfo=datetime.timezone.utc)
+                    
+                    if s_month > e_month: 
+                        if ts.month >= s_month:
+                            start_val = start_val.replace(year=now.year - 1)
+                        else:
+                            end_val = end_val.replace(year=now.year + 1)
+                            
+                    if start_val <= ts <= end_val:
+                        data_dict[label] += 1
+                        break
+                except Exception:
+                    continue
+
+    elif range == "monthly":
+        # Tren 6 bulan terakhir (per bulan)
+        start_time = now - timedelta(days=180)
+        start_date = start_time.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        result = await db.execute(
+            select(ChatLog.created_at)
+            .where(ChatLog.created_at >= start_date)
+            .order_by(ChatLog.created_at.asc())
+        )
+        timestamps = result.scalars().all()
+
+        # Inisialisasi 6 bulan terakhir
+        for i in range(6):
+            dt = now - timedelta(days=(5-i)*30)
+            label = dt.strftime("%b %Y")
+            data_dict[label] = 0
+
+        for ts in timestamps:
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=datetime.timezone.utc)
+            label = ts.strftime("%b %Y")
+            if label in data_dict:
+                data_dict[label] += 1
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Range tidak valid. Gunakan 'hourly', 'daily', 'weekly', atau 'monthly'."
+        )
+
+    return [{"label": k, "value": v} for k, v in data_dict.items()]
+
+
 # ---------------------------------------------------------------------------
 # Endpoint 4: POST /api/documents/upload
 # ---------------------------------------------------------------------------

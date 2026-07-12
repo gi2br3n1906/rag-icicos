@@ -5,6 +5,7 @@
  */
 import { ref, onMounted } from 'vue'
 import ChatLogsTable from '@/components/ChatLogsTable.vue'
+import ChatTrendsChart from '@/components/ChatTrendsChart.vue'
 import { getDashboardStats } from '@/services/api'
 
 // Dynamic analytics from backend
@@ -119,6 +120,9 @@ onMounted(async () => {
         </div>
       </div>
     </div>
+
+    <!-- Chat trends chart component -->
+    <ChatTrendsChart />
 
     <!-- Section divider -->
     <div class="flex items-center gap-3">

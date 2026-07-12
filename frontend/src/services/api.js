@@ -159,6 +159,10 @@ export const createUser = (email, password, role) =>
 /** DELETE /api/users/{user_id} */
 export const deleteUser = (userId) => api.delete(`/api/users/${userId}`)
 
+/** GET /api/stats/trends */
+export const getChatTrends = (range) => api.get('/api/stats/trends', { params: { range } })
+
 /** POST /api/knowledge/reset — wipes ChromaDB and all DB records (destructive!) */
 export const resetKnowledgeBase = () => api.post('/api/knowledge/reset')
+
 

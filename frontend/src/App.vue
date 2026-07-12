@@ -1,13 +1,28 @@
 <script setup>
 // App.vue – Root component: wraps Sidebar + RouterView layout
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
+import { useRoute } from 'vue-router'
 import Sidebar from '@/components/Sidebar.vue'
 
+const route = useRoute()
 const isSidebarOpen = ref(false)
+
+// Check if current route is the login page
+const isLoginPage = computed(() => route.name === 'Login' || route.path === '/login')
 </script>
 
 <template>
-  <div class="flex h-screen bg-gray-50 overflow-hidden">
+  <!-- Fullscreen Login Layout (No Sidebar/Header) -->
+  <div v-if="isLoginPage" class="h-screen w-full overflow-hidden">
+    <RouterView v-slot="{ Component }">
+      <Transition name="fade" mode="out-in">
+        <component :is="Component" />
+      </Transition>
+    </RouterView>
+  </div>
+
+  <!-- Standard Admin Panel Dashboard Shell -->
+  <div v-else class="flex h-screen bg-gray-50 overflow-hidden">
     <!-- Sidebar Navigation Drawer -->
     <Sidebar :is-open="isSidebarOpen" @close="isSidebarOpen = false" />
 

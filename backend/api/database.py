@@ -115,30 +115,42 @@ async def init_db() -> None:
         except Exception as alter_exc:
             logger.warning(f"[DB] Gagal menambahkan kolom 'username' secara dinamis: {alter_exc}")
 
-        # Lakukan seeding untuk akun Admin & Humas jika tabel users masih kosong
+        # Lakukan seeding untuk akun Admin & Humas
         from backend.core.security import get_password_hash
         try:
-            res = await conn.execute(text("SELECT COUNT(*) FROM users"))
-            count = res.scalar()
-            if count == 0:
+            # Hapus akun Humas lama jika ada (cs.icicos@gmail.com)
+            await conn.execute(
+                text("DELETE FROM users WHERE email = :old_humas"),
+                {"old_humas": "cs.icicos@gmail.com"}
+            )
+
+            # Pastikan akun Admin aktif ada
+            res_admin = await conn.execute(
+                text("SELECT COUNT(*) FROM users WHERE email = :admin_email"),
+                {"admin_email": "icicos@live.undip.ac.id"}
+            )
+            if res_admin.scalar() == 0:
                 admin_hash = get_password_hash("chatbot9.")
+                await conn.execute(
+                    text("INSERT INTO users (email, password_hash, role) VALUES (:email, :pwd, 'admin')"),
+                    {"email": "icicos@live.undip.ac.id", "pwd": admin_hash}
+                )
+                logger.info("✅ Admin user verified/created.")
+
+            # Pastikan akun Humas baru aktif ada
+            res_humas = await conn.execute(
+                text("SELECT COUNT(*) FROM users WHERE email = :humas_email"),
+                {"humas_email": "web.icicos@gmail.com"}
+            )
+            if res_humas.scalar() == 0:
                 humas_hash = get_password_hash("chatbot9.")
                 await conn.execute(
-                    text(
-                        "INSERT INTO users (email, password_hash, role) VALUES "
-                        "(:admin_email, :admin_hash, 'admin'), "
-                        "(:humas_email, :humas_hash, 'humas')"
-                    ),
-                    {
-                        "admin_email": "icicos@live.undip.ac.id",
-                        "admin_hash": admin_hash,
-                        "humas_email": "cs.icicos@gmail.com",
-                        "humas_hash": humas_hash,
-                    }
+                    text("INSERT INTO users (email, password_hash, role) VALUES (:email, :pwd, 'humas')"),
+                    {"email": "web.icicos@gmail.com", "pwd": humas_hash}
                 )
-                logger.info("✅ Database seeded: admin and humas users created.")
+                logger.info("✅ Humas user verified/created.")
         except Exception as seed_exc:
-            logger.warning(f"[DB] Gagal seeding user: {seed_exc}")
+            logger.warning(f"[DB] Gagal seeding/updating user: {seed_exc}")
 
     logger.info("✅ Database initialized — semua tabel siap digunakan.")
 

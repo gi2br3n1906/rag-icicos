@@ -136,7 +136,7 @@ async function handleLogin() {
           </div>
           <div class="border-t border-slate-900/60 pt-2">
             <span class="font-bold text-indigo-400">Humas Role:</span>
-            <p class="font-mono mt-0.5">cs.icicos@gmail.com / chatbot9.</p>
+            <p class="font-mono mt-0.5">web.icicos@gmail.com / chatbot9.</p>
           </div>
         </div>
       </div>

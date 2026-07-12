@@ -10,7 +10,11 @@ class Settings(BaseSettings):
     Konfigurasi aplikasi. Nilai dibaca otomatis dari file .env
     atau environment variables sistem.
     """
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore"
+    )
 
     # --- Telegram ---
     telegram_bot_token: str = ""

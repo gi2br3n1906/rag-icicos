@@ -60,6 +60,24 @@ def _get_sop_vectorstore() -> "Chroma":
                     embedding_function=get_embeddings(),
                     collection_name="icicos_sop",
                 )
+                # Pembersihan berkala jika ada data korup (page_content=None) di ChromaDB
+                try:
+                    collection = _sop_vectorstore._collection
+                    existing = collection.get(include=["documents"])
+                    if existing and "ids" in existing and "documents" in existing and existing["documents"]:
+                        corrupt_ids = [
+                            existing["ids"][idx]
+                            for idx, doc in enumerate(existing["documents"])
+                            if doc is None
+                        ]
+                        if corrupt_ids:
+                            logger.warning(
+                                f"[Chroma-Cleanup-SOP] Menemukan {len(corrupt_ids)} record korup (documents=None). "
+                                f"Menghapus IDs: {corrupt_ids}"
+                            )
+                            collection.delete(ids=corrupt_ids)
+                except Exception as cleanup_exc:
+                    logger.warning(f"[Chroma-Cleanup-SOP] Gagal melakukan pembersihan: {cleanup_exc}")
     return _sop_vectorstore
 
 
@@ -75,6 +93,24 @@ def _get_faq_vectorstore() -> "Chroma":
                     embedding_function=get_embeddings(),
                     collection_name="icicos_faq",
                 )
+                # Pembersihan berkala jika ada data korup (page_content=None) di ChromaDB
+                try:
+                    collection = _faq_vectorstore._collection
+                    existing = collection.get(include=["documents"])
+                    if existing and "ids" in existing and "documents" in existing and existing["documents"]:
+                        corrupt_ids = [
+                            existing["ids"][idx]
+                            for idx, doc in enumerate(existing["documents"])
+                            if doc is None
+                        ]
+                        if corrupt_ids:
+                            logger.warning(
+                                f"[Chroma-Cleanup-FAQ] Menemukan {len(corrupt_ids)} record korup (documents=None). "
+                                f"Menghapus IDs: {corrupt_ids}"
+                            )
+                            collection.delete(ids=corrupt_ids)
+                except Exception as cleanup_exc:
+                    logger.warning(f"[Chroma-Cleanup-FAQ] Gagal melakukan pembersihan: {cleanup_exc}")
     return _faq_vectorstore
 
 

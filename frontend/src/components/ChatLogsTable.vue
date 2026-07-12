@@ -166,6 +166,11 @@ function shouldShowToggle(text) {
   return plainText.length > 80
 }
 
+function shouldShowQuestionToggle(text) {
+  if (!text) return false
+  return text.length > 30
+}
+
 function copyToClipboard(username) {
   if (!username) return
   // Remove @ if it's already there to prevent double @
@@ -340,8 +345,8 @@ watch([currentPage, searchQuery], () => {
             <!-- Question -->
             <td
               class="px-5 py-3.5 text-slate-600 max-w-xs transition-colors duration-150"
-              :class="{ 'cursor-pointer hover:bg-indigo-50/30': shouldShowToggle(log.query ?? log.question) }"
-              @click="shouldShowToggle(log.query ?? log.question) && toggleExpandQuestion(log.id)"
+              :class="{ 'cursor-pointer hover:bg-indigo-50/30': shouldShowQuestionToggle(log.query ?? log.question) }"
+              @click="shouldShowQuestionToggle(log.query ?? log.question) && toggleExpandQuestion(log.id)"
             >
               <div class="relative">
                 <div
@@ -354,7 +359,7 @@ watch([currentPage, searchQuery], () => {
                 </div>
 
                 <div
-                  v-if="shouldShowToggle(log.query ?? log.question)"
+                  v-if="shouldShowQuestionToggle(log.query ?? log.question)"
                   class="mt-1.5 flex items-center gap-1 text-[11px] font-bold text-indigo-600 hover:text-indigo-800 transition-colors select-none"
                 >
                   <span>{{ isQuestionExpanded(log.id) ? 'Collapse Question' : 'Read Full Question' }}</span>

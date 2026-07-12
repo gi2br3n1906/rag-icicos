@@ -131,12 +131,164 @@ async def get_current_user_profile(
         "role": current_user.role
     }
 
+@auth_router.put(
+    "/change-password",
+    summary="Ganti Password Pengguna Aktif",
+    response_description="Status keberhasilan ganti password"
+)
+async def change_password(
+    payload: Dict[str, Any],
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> Dict[str, Any]:
+    current_password = payload.get("current_password") or ""
+    new_password = payload.get("new_password") or ""
+
+    if not current_password or not new_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password saat ini dan password baru wajib diisi."
+        )
+
+    if not verify_password(current_password, current_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password saat ini salah."
+        )
+
+    from backend.core.security import get_password_hash
+    current_user.password_hash = get_password_hash(new_password)
+    await db.commit()
+
+    return {
+        "status": "success",
+        "message": "Password berhasil diperbarui."
+    }
+
+# Helper dependency to enforce admin role specifically
+async def get_current_admin(
+    current_user: User = Depends(get_current_user)
+) -> User:
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden: Admin role required."
+        )
+    return current_user
+
 # Protected Admin API Router
 router = APIRouter(
     prefix="/api",
     tags=["Admin API"],
     dependencies=[Depends(check_permissions)]
 )
+
+@router.get(
+    "/users",
+    summary="Daftar Semua Pengguna (Admin Only)",
+    response_description="List semua pengguna di database"
+)
+async def list_users(
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin)
+) -> List[Dict[str, Any]]:
+    result = await db.execute(select(User).order_by(User.created_at.asc()))
+    users = result.scalars().all()
+    return [
+        {
+            "id": u.id,
+            "email": u.email,
+            "role": u.role,
+            "created_at": u.created_at.isoformat() if u.created_at else None
+        }
+        for u in users
+    ]
+
+@router.post(
+    "/users",
+    summary="Tambah Pengguna Baru (Admin Only)",
+    response_description="Data pengguna yang baru dibuat"
+)
+async def create_user(
+    payload: Dict[str, Any],
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin)
+) -> Dict[str, Any]:
+    email = (payload.get("email") or "").strip()
+    password = payload.get("password") or ""
+    role = (payload.get("role") or "humas").strip()
+
+    if not email or not password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email dan password wajib diisi."
+        )
+
+    if role not in ["admin", "humas"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Role tidak valid. Harus 'admin' atau 'humas'."
+        )
+
+    # Check unique email
+    res_existing = await db.execute(select(User).where(User.email == email))
+    if res_existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email sudah terdaftar."
+        )
+
+    from backend.core.security import get_password_hash
+    new_user = User(
+        email=email,
+        password_hash=get_password_hash(password),
+        role=role
+    )
+    db.add(new_user)
+    await db.commit()
+    await db.refresh(new_user)
+
+    return {
+        "status": "success",
+        "user": {
+            "id": new_user.id,
+            "email": new_user.email,
+            "role": new_user.role,
+            "created_at": new_user.created_at.isoformat() if new_user.created_at else None
+        }
+    }
+
+@router.delete(
+    "/users/{user_id}",
+    summary="Hapus Pengguna (Admin Only)",
+    response_description="Status penghapusan"
+)
+async def delete_user(
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin)
+) -> Dict[str, Any]:
+    if admin.id == user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Anda tidak dapat menghapus akun Anda sendiri."
+        )
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pengguna tidak ditemukan."
+        )
+
+    await db.delete(user)
+    await db.commit()
+
+    return {
+        "status": "success",
+        "message": f"Pengguna dengan email {user.email} berhasil dihapus."
+    }
 
 # Folder penyimpanan sementara file PDF yang di-upload
 # Path relatif terhadap posisi backend/ dijalankan sebagai CWD

@@ -145,6 +145,20 @@ export const importFaqsJson = (file) => {
 /** POST /api/auth/login */
 export const loginUser = (email, password) => api.post('/api/auth/login', { email, password })
 
+/** PUT /api/auth/change-password */
+export const changePassword = (current_password, new_password) =>
+  api.put('/api/auth/change-password', { current_password, new_password })
+
+/** GET /api/users */
+export const getUsers = () => api.get('/api/users')
+
+/** POST /api/users */
+export const createUser = (email, password, role) =>
+  api.post('/api/users', { email, password, role })
+
+/** DELETE /api/users/{user_id} */
+export const deleteUser = (userId) => api.delete(`/api/users/${userId}`)
 
 /** POST /api/knowledge/reset — wipes ChromaDB and all DB records (destructive!) */
 export const resetKnowledgeBase = () => api.post('/api/knowledge/reset')
+

@@ -57,6 +57,12 @@ const routes = [
     meta: { title: 'WhatsApp Review – ICICoS 2026 Admin', requiresAdmin: true },
   },
   {
+    path: '/settings',
+    name: 'AccountSettings',
+    component: () => import('./views/AccountSettings.vue'),
+    meta: { title: 'Settings – ICICoS 2026 Admin' },
+  },
+  {
     path: '/:pathMatch(.*)*',
     redirect: '/dashboard',
   },

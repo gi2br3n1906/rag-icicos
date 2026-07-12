@@ -89,7 +89,7 @@ async function handleLogin() {
               id="email"
               v-model="email"
               type="email"
-              placeholder="e.g. icicos@live.undip.ac.id"
+              placeholder="Enter your email address"
               class="w-full bg-slate-950/80 border border-slate-800 focus:border-indigo-500/80 focus:ring-2 focus:ring-indigo-500/20 text-white rounded-xl pl-4 pr-4 py-3 text-sm transition outline-none"
               required
             />
@@ -104,7 +104,7 @@ async function handleLogin() {
               id="password"
               v-model="password"
               type="password"
-              placeholder="••••••••"
+              placeholder="Enter your password"
               class="w-full bg-slate-950/80 border border-slate-800 focus:border-indigo-500/80 focus:ring-2 focus:ring-indigo-500/20 text-white rounded-xl pl-4 pr-4 py-3 text-sm transition outline-none"
               required
             />
@@ -125,22 +125,6 @@ async function handleLogin() {
           <span>{{ isLoading ? 'Signing In…' : 'Sign In' }}</span>
         </button>
       </form>
-
-      <!-- Account Help Guidelines Box -->
-      <div class="mt-8 pt-6 border-t border-slate-800/80 flex flex-col gap-3 text-[11px] text-slate-400">
-        <p class="font-semibold text-slate-300">Demo Accounts Available:</p>
-        <div class="flex flex-col gap-2 bg-slate-950/40 border border-slate-800/50 p-3 rounded-xl">
-          <div>
-            <span class="font-bold text-indigo-400">Admin Role:</span>
-            <p class="font-mono mt-0.5">icicos@live.undip.ac.id / chatbot9.</p>
-          </div>
-          <div class="border-t border-slate-900/60 pt-2">
-            <span class="font-bold text-indigo-400">Humas Role:</span>
-            <p class="font-mono mt-0.5">web.icicos@gmail.com / chatbot9.</p>
-          </div>
-        </div>
-      </div>
-
     </div>
   </div>
 </template>

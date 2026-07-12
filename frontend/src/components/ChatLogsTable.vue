@@ -140,6 +140,7 @@ function formatDateTime(val) {
 
 // ─── Expand/Collapse Answers ──────────────────────────────────────────────────
 const expandedLogs = ref({})
+const expandedQuestions = ref({})
 
 function toggleExpand(id) {
   expandedLogs.value[id] = !expandedLogs.value[id]
@@ -149,6 +150,14 @@ function isExpanded(id) {
   return !!expandedLogs.value[id]
 }
 
+function toggleExpandQuestion(id) {
+  expandedQuestions.value[id] = !expandedQuestions.value[id]
+}
+
+function isQuestionExpanded(id) {
+  return !!expandedQuestions.value[id]
+}
+
 function shouldShowToggle(text) {
   if (!text) return false
   // Remove HTML tags to count actual text length
@@ -156,9 +165,22 @@ function shouldShowToggle(text) {
   return plainText.length > 80
 }
 
+function copyToClipboard(username) {
+  if (!username) return
+  // Remove @ if it's already there to prevent double @
+  const cleanUsername = username.replace(/^@/, '')
+  navigator.clipboard.writeText(`@${cleanUsername}`).then(() => {
+    // Show a temporary alert or custom notification (using alert is simple & standard here)
+    alert(`Copied Telegram Username: @${cleanUsername}`)
+  }).catch(err => {
+    console.error('Failed to copy username:', err)
+  })
+}
+
 // Reset expanded states on page or search filter change
 watch([currentPage, searchQuery], () => {
   expandedLogs.value = {}
+  expandedQuestions.value = {}
 })
 </script>
 
@@ -289,19 +311,61 @@ watch([currentPage, searchQuery], () => {
 
             <!-- User ID -->
             <td class="px-5 py-3.5">
-              <span class="inline-flex items-center gap-1.5">
-                <span class="w-6 h-6 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs font-bold">
-                  {{ (normField(log, 'userId', 'user_id') || '?').charAt(0).toUpperCase() }}
+              <div class="flex flex-col">
+                <span class="inline-flex items-center gap-1.5">
+                  <span class="w-6 h-6 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs font-bold">
+                    {{ (normField(log, 'userId', 'user_id') || '?').charAt(0).toUpperCase() }}
+                  </span>
+                  <span class="text-slate-700 font-medium font-mono text-xs">
+                    {{ normField(log, 'userId', 'user_id') }}
+                  </span>
                 </span>
-                <span class="text-slate-700 font-medium">
-                  {{ normField(log, 'userId', 'user_id') }}
+                <span
+                  v-if="log.username"
+                  @click="copyToClipboard(log.username)"
+                  class="text-[10px] text-slate-400 mt-1 cursor-pointer hover:text-indigo-600 hover:underline transition-colors flex items-center gap-0.5"
+                  title="Click to copy username"
+                >
+                  @{{ log.username }}
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3 opacity-60 shrink-0">
+                    <path d="M7 3.5A1.5 1.5 0 0 1 8.5 2h3.879a1.5 1.5 0 0 1 1.06.44l3.122 3.12A1.5 1.5 0 0 1 17 6.622V12.5a1.5 1.5 0 0 1-1.5 1.5h-1v-3.078a3 3 0 0 0-.88-2.122L10.5 5.68A3 3 0 0 0 8.378 4.8H7v-1.3Z" />
+                    <path d="M4.25 5.5A1.75 1.75 0 0 0 2.5 7.25v8.5c0 .966.784 1.75 1.75 1.75h6.5A1.75 1.75 0 0 0 12.5 15.75v-8.5A1.75 1.75 0 0 0 10.75 5.5h-6.5Z" />
+                  </svg>
                 </span>
-              </span>
+              </div>
             </td>
 
             <!-- Question -->
-            <td class="px-5 py-3.5 text-slate-600 max-w-xs">
-              <p class="line-clamp-2">{{ log.query ?? log.question }}</p>
+            <td
+              class="px-5 py-3.5 text-slate-600 max-w-xs transition-colors duration-150"
+              :class="{ 'cursor-pointer hover:bg-indigo-50/30': shouldShowToggle(log.query ?? log.question) }"
+              @click="shouldShowToggle(log.query ?? log.question) && toggleExpandQuestion(log.id)"
+            >
+              <div class="relative">
+                <div
+                  :class="[
+                    'text-slate-600 leading-relaxed transition-all duration-300',
+                    isQuestionExpanded(log.id) ? 'line-clamp-none' : 'line-clamp-2'
+                  ]"
+                >
+                  {{ log.query ?? log.question }}
+                </div>
+
+                <div
+                  v-if="shouldShowToggle(log.query ?? log.question)"
+                  class="mt-1.5 flex items-center gap-1 text-[11px] font-bold text-indigo-600 hover:text-indigo-800 transition-colors select-none"
+                >
+                  <span>{{ isQuestionExpanded(log.id) ? 'Collapse Question' : 'Read Full Question' }}</span>
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                    :class="['w-3.5 h-3.5 transition-transform duration-200', isQuestionExpanded(log.id) ? 'rotate-180' : '']"
+                  >
+                    <path fill-rule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
+                  </svg>
+                </div>
+              </div>
             </td>
 
             <!-- Bot Answer – renders <b> / <i> HTML from backend safely -->

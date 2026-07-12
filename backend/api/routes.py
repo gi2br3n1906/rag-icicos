@@ -93,6 +93,7 @@ async def get_chat_logs(
         {
             "id": log.id,
             "user_id": log.user_id,
+            "username": log.username,
             "query": log.query,
             "answer": log.answer,
             "similarity_score": log.similarity_score,

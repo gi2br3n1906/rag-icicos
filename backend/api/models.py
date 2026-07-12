@@ -74,6 +74,10 @@ class ChatLog(Base):
         String(100), nullable=False, index=True,
         comment="Telegram user ID pengirim pesan (sebagai string untuk fleksibilitas)"
     )
+    username: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True,
+        comment="Telegram username pengirim pesan (jika ada)"
+    )
     query: Mapped[str] = mapped_column(
         Text, nullable=False,
         comment="Pertanyaan asli dari user"

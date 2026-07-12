@@ -64,6 +64,7 @@ def format_llm_output(text: str) -> str:
 
 async def _log_chat_to_db(
     user_id: str,
+    username: str | None,
     query: str,
     answer: str,
     similarity_score: float,
@@ -76,6 +77,7 @@ async def _log_chat_to_db(
 
     Args:
         user_id         : Telegram user ID sebagai string.
+        username        : Telegram username pengirim pesan (jika ada).
         query           : Pertanyaan asli dari user.
         answer          : Jawaban teks final (sudah di-format HTML).
         similarity_score: Skor retrieval tertinggi (0.0 jika fallback).
@@ -86,6 +88,7 @@ async def _log_chat_to_db(
 
         new_log = ChatLog(
             user_id=user_id,
+            username=username,
             query=query,
             answer=answer,
             similarity_score=float(similarity_score),
@@ -424,6 +427,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Log ke database (fire-and-forget)
         await _log_chat_to_db(
             user_id=str(user.id),
+            username=user.username,
             query=user_query,
             answer=formatted_answer,
             similarity_score=similarity_score,

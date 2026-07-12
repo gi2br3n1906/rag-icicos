@@ -106,5 +106,14 @@ async def init_db() -> None:
         except Exception as alter_exc:
             logger.warning(f"[DB] Gagal menambahkan kolom 'title' secara dinamis: {alter_exc}")
 
+        # Tambahkan kolom username ke tabel chat_logs secara dinamis jika belum ada.
+        try:
+            await conn.execute(
+                text("ALTER TABLE chat_logs ADD COLUMN IF NOT EXISTS username VARCHAR(255)")
+            )
+            logger.info("✅ Column 'username' verified/added to 'chat_logs' table.")
+        except Exception as alter_exc:
+            logger.warning(f"[DB] Gagal menambahkan kolom 'username' secara dinamis: {alter_exc}")
+
     logger.info("✅ Database initialized — semua tabel siap digunakan.")
 

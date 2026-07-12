@@ -2,6 +2,12 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
+defineProps({
+  isOpen: Boolean
+})
+
+const emit = defineEmits(['close'])
+
 const route = useRoute()
 const router = useRouter()
 
@@ -28,14 +34,20 @@ function isActive(path) {
 }
 
 function navigate(path) {
+  emit('close')
   router.push(path)
 }
 </script>
 
 <template>
-  <aside class="w-64 bg-slate-900 flex flex-col shrink-0 h-full">
+  <aside 
+    :class="[
+      isOpen ? 'translate-x-0 shadow-2xl' : '-translate-x-full',
+      'w-64 bg-slate-900 flex flex-col shrink-0 h-full fixed md:static inset-y-0 left-0 z-50 transform md:translate-x-0 transition-transform duration-250 ease-in-out'
+    ]"
+  >
     <!-- Brand / Logo -->
-    <div class="px-5 py-6 border-b border-slate-700/60">
+    <div class="px-5 py-6 border-b border-slate-700/60 flex items-center justify-between">
       <div class="flex items-center gap-3">
         <div class="w-9 h-9 rounded-xl bg-indigo-500 flex items-center justify-center shadow-lg">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="white" class="w-5 h-5">
@@ -47,7 +59,19 @@ function navigate(path) {
           <p class="text-slate-400 text-xs">Admin Dashboard</p>
         </div>
       </div>
+
+      <!-- Mobile close button -->
+      <button 
+        @click="$emit('close')"
+        class="md:hidden p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition"
+        title="Close menu"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-5 h-5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" />
+        </svg>
+      </button>
     </div>
+
 
     <!-- Navigation Links -->
     <nav class="flex-1 px-3 py-4 space-y-1 overflow-y-auto">

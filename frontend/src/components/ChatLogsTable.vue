@@ -276,8 +276,8 @@ watch([currentPage, searchQuery], () => {
     </div>
 
     <!-- ── Data table ─────────────────────────────────────────────────────── -->
-    <div v-else class="overflow-x-auto">
-      <table class="w-full text-sm">
+    <div v-else class="overflow-x-auto w-full">
+      <table class="w-full text-sm min-w-[850px]">
         <thead>
           <tr class="bg-slate-50 border-b border-gray-100">
             <th class="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider w-36">

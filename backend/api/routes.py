@@ -447,7 +447,7 @@ async def get_dashboard_stats(
     response_description="Data tren jumlah chat log untuk diagram (hourly, daily, weekly, monthly)"
 )
 async def get_chat_trends(
-    range: str = "daily",  # "hourly" | "daily" | "weekly" | "monthly"
+    time_range: str = Query("daily", alias="range"),
     db: AsyncSession = Depends(get_db)
 ) -> List[Dict[str, Any]]:
     """
@@ -462,7 +462,7 @@ async def get_chat_trends(
     now = datetime.datetime.now(datetime.timezone.utc)
     data_dict = OrderedDict()
 
-    if range == "hourly":
+    if time_range == "hourly":
         # Tren 24 jam terakhir (per jam)
         start_time = now - timedelta(hours=23)
         start_hour = start_time.replace(minute=0, second=0, microsecond=0)
@@ -487,7 +487,7 @@ async def get_chat_trends(
             if label in data_dict:
                 data_dict[label] += 1
 
-    elif range == "daily":
+    elif time_range == "daily":
         # Tren 7 hari terakhir (per hari)
         start_time = now - timedelta(days=6)
         start_date = start_time.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -512,7 +512,7 @@ async def get_chat_trends(
             if label in data_dict:
                 data_dict[label] += 1
 
-    elif range == "weekly":
+    elif time_range == "weekly":
         # Tren 6 minggu terakhir (per rentang minggu)
         start_time = now - timedelta(days=41)
         start_date = start_time.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -554,7 +554,7 @@ async def get_chat_trends(
                 except Exception:
                     continue
 
-    elif range == "monthly":
+    elif time_range == "monthly":
         # Tren 6 bulan terakhir (per bulan)
         start_time = now - timedelta(days=180)
         start_date = start_time.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
